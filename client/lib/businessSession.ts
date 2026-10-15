@@ -7,6 +7,8 @@ import type { UserSession } from "@/lib/authSession";
  * الحساب موظف في المنشأة (ببريده) أو مستخدم خاص فعال، والصلاحيات من دوره.
  * كل الاستعلامات معزولة بقاعدة البيانات على منشأة المستخدم.
  */
+export const USER_SESSION_EVENT = "user-session-changed";
+
 export type BusinessSessionResult = {
   ok: boolean;
   session?: UserSession;
@@ -64,5 +66,7 @@ export async function buildBusinessSession(userId: string, userEmail: string): P
     accountType,
   };
   localStorage.setItem("user_session", JSON.stringify(session));
+  // الصلاحيات المعروضة تُعاد قراءتها فورًا بعد تجهيز الجلسة
+  window.dispatchEvent(new Event(USER_SESSION_EVENT));
   return { ok: true, session };
 }

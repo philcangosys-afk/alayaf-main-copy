@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 import { readUserSession, type PermissionLevel, type PermissionMap } from "@/lib/authSession";
+import { USER_SESSION_EVENT } from "@/lib/businessSession";
 
 type PermState = {
   permissions: PermissionMap;
@@ -36,6 +37,16 @@ function mergeGrants(rows: GrantRow[]): PermissionMap {
 export function useRolePermissions(): PermState {
   const location = useLocation();
   const [state, setState] = useState<PermState>({ permissions: {}, ready: false });
+  // جلسة النظام جُهّزت أو تغيّرت: تُعاد قراءة الصلاحيات
+  const [sessionVersion, setSessionVersion] = useState(0);
+  useEffect(() => {
+    const onSessionChanged = () => {
+      setState((current) => ({ ...current, ready: false }));
+      setSessionVersion((value) => value + 1);
+    };
+    window.addEventListener(USER_SESSION_EVENT, onSessionChanged);
+    return () => window.removeEventListener(USER_SESSION_EVENT, onSessionChanged);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,7 +92,7 @@ export function useRolePermissions(): PermState {
     return () => { cancelled = true; };
   // refetch on every route change so role-editor updates are immediate
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+  }, [location.pathname, sessionVersion]);
 
   return state;
 }
