@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { COMPANY_PROFILE, PLATFORM_NAME_EN, zatcaDeviceSerialKey } from "@/lib/companyProfile";
 import ZatcaPhaseCard from "@/components/zatca/ZatcaPhaseCard";
+import { useCompany } from "@/lib/companyContext";
 import {
   AlertCircle,
   Building2,
@@ -199,6 +200,11 @@ export default function ZATCASettings() {
       : buildInitialIdentity();
   });
   const [selectedMode, setSelectedMode] = useState<ZatcaMode>("simulation");
+  // المرحلة الأولى لا تحتاج الربط ولا OTP: قسم المرحلة الثانية مطوي حتى يفتحه المستخدم
+  const company = useCompany();
+  const companyPhase1 = company.company?.zatca_phase === "phase1";
+  const [showPhase2Setup, setShowPhase2Setup] = useState(false);
+  const phase2SetupHidden = companyPhase1 && !showPhase2Setup;
   const [setup, setSetup] = useState<SetupMetadata | null>(null);
   const [audit, setAudit] = useState<any[]>([]);
   const [otp, setOtp] = useState("");
@@ -696,28 +702,64 @@ export default function ZATCASettings() {
               الفاتورة الإلكترونية (ZATCA)
             </p>
             <h1 className="mt-1 text-3xl font-bold text-slate-950">
-              إعداد الربط مع ZATCA
+              {companyPhase1 ? "مرحلة الفوترة والربط مع ZATCA" : "إعداد الربط مع ZATCA"}
             </h1>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              إعداد منفصل وآمن للمحاكاة أو للإنتاج الحقيقي. لا تُرسل فواتير ولا
-              يُطلب OTP تلقائيًا، ولا تُعرض المفاتيح أو الأسرار أو CSID الكامل.
+              {companyPhase1
+                ? "المنشأة في المرحلة الأولى: الفواتير تصدر من النظام برمز QR مباشرة، دون ربط مع الهيئة ولا OTP."
+                : "إعداد منفصل وآمن للمحاكاة أو للإنتاج الحقيقي. لا تُرسل فواتير ولا يُطلب OTP تلقائيًا، ولا تُعرض المفاتيح أو الأسرار أو CSID الكامل."}
             </p>
           </div>
-          <button
-            onClick={() => loadStatus()}
-            disabled={Boolean(action)}
-            className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-          >
-            <RefreshCw
-              className={`h-4 w-4 ${action === "refresh" ? "animate-spin" : ""}`}
-            />{" "}
-            تحديث الحالة
-          </button>
+          {!phase2SetupHidden && (
+            <button
+              onClick={() => loadStatus()}
+              disabled={Boolean(action)}
+              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${action === "refresh" ? "animate-spin" : ""}`}
+              />{" "}
+              تحديث الحالة
+            </button>
+          )}
         </header>
 
         <ZatcaPhaseCard />
 
-        <h2 className="text-base font-bold text-slate-900">الربط مع الهيئة (المرحلة الثانية)</h2>
+        {phase2SetupHidden ? (
+          <section className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">الربط مع الهيئة (المرحلة الثانية)</h2>
+                <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+                  غير مطلوب في المرحلة الأولى. أكمله عند اقتراب موعد إلزام منشأتك بالمرحلة الثانية: بيانات وحدة
+                  إصدار الفواتير، ثم رمز OTP من بوابة «فاتورة»، ثم تفعيل جهاز الإنتاج، ثم الانتقال من البطاقة أعلاه.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPhase2Setup(true)}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-bold text-slate-700 hover:bg-slate-100"
+              >
+                إعداد الربط للمرحلة الثانية
+              </button>
+            </div>
+          </section>
+        ) : (
+          <>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-bold text-slate-900">الربط مع الهيئة (المرحلة الثانية)</h2>
+          {companyPhase1 && (
+            <button
+              type="button"
+              onClick={() => setShowPhase2Setup(false)}
+              disabled={Boolean(action)}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            >
+              إخفاء إعداد المرحلة الثانية
+            </button>
+          )}
+        </div>
 
         <section className="grid gap-4 md:grid-cols-2">
           {[
@@ -1449,6 +1491,8 @@ export default function ZATCASettings() {
               })}
             </div>
           </section>
+        )}
+          </>
         )}
 
         {loading && (

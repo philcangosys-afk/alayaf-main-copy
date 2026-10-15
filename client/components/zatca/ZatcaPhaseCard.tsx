@@ -51,6 +51,7 @@ export default function ZatcaPhaseCard() {
   const record = company.company;
   const current: ZatcaPhase = record?.zatca_phase === "phase1" ? "phase1" : "phase2";
   const supported = Boolean(record && record.zatca_phase);
+  const hasVat = Boolean(String(record?.vat_number ?? "").trim());
   const [selected, setSelected] = useState<ZatcaPhase>(current);
   const [isAdmin, setIsAdmin] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -113,6 +114,18 @@ export default function ZatcaPhaseCard() {
         </span>
       </div>
 
+      {current === "phase1" && (
+        <div
+          className={`mt-4 rounded-xl px-4 py-3 text-sm font-semibold leading-6 ${
+            hasVat ? "bg-emerald-50 text-emerald-800" : "bg-rose-50 text-rose-700"
+          }`}
+        >
+          {hasVat
+            ? "المرحلة الأولى تعمل الآن: كل فاتورة مبيعات وإشعار يصدر من النظام برمز QR مباشرة، دون ربط مع الهيئة ولا OTP."
+            : "المرحلة الأولى مختارة، لكن الرقم الضريبي للمنشأة غير مسجّل: فواتير المبيعات والإشعارات موقوفة حتى تضيفه إدارة المنصة."}
+        </div>
+      )}
+
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {PHASES.map((phase) => {
           const active = selected === phase.value;
@@ -159,9 +172,6 @@ export default function ZatcaPhaseCard() {
             : "تغيير المرحلة لمدير النظام فقط."}
           {current === "phase1"
             ? " تفعيل جهاز الإنتاج في الأسفل لا ينقل المنشأة للمرحلة الثانية؛ الانتقال يتم من هنا في موعد إلزامك."
-            : ""}
-          {current === "phase1" && !record?.vat_number
-            ? " لا يوجد رقم ضريبي للمنشأة: فواتير المبيعات والإشعارات موقوفة حتى تضيفه إدارة المنصة."
             : ""}
         </p>
         {isAdmin && (
