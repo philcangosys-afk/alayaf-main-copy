@@ -8,6 +8,21 @@ import AuthShell, { authButtonStyle, authInputClass, authLabelClass } from "@/co
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
+// سبب رفض التسجيل من Supabase Auth بالعربية (الرمز أولًا ثم نص الرسالة)
+const signupErrorText = (error: { message?: string; code?: string; status?: number }) => {
+  const text = `${error.code ?? ""} ${error.message ?? ""}`;
+  if (/not.?authorized/i.test(text)) {
+    return "البريد غير مسموح بالإرسال إليه: بريد Supabase الافتراضي يرسل لأعضاء المشروع فقط. اضبط SMTP خاصًا في إعدادات Supabase.";
+  }
+  if (/rate|limit/i.test(text)) return "محاولات كثيرة؛ حاول بعد قليل";
+  if (/signup.?disabled|signups not allowed/i.test(text)) return "التسجيل معطّل في إعدادات Supabase (Allow new users to sign up)";
+  if (/weak|pwned/i.test(text)) return "كلمة المرور ضعيفة؛ اختر كلمة أطول فيها حروف وأرقام";
+  if (/email/i.test(text) && /invalid|validation/i.test(text)) return "البريد الإلكتروني غير صالح أو نطاقه غير مقبول";
+  if (/sending|smtp|confirmation/i.test(text) || error.status === 500) return "تعذر إرسال رسالة التأكيد؛ تحقق من إعداد البريد (SMTP) في Supabase";
+  if (/fetch|network/i.test(text)) return "تعذر الاتصال بالخادم؛ تحقق من الإنترنت";
+  return "تعذر إنشاء الحساب، حاول مرة أخرى";
+};
+
 /**
  * إنشاء حساب صاحب منشأة جديدة: حساب دخول ببريد يُؤكَّد برسالة،
  * ثم يسجّل الدخول ويملأ بيانات المنشأة (صفحة تسجيل المنشأة)، وتُفعَّل بعد موافقة إدارة المنصة.
@@ -42,7 +57,8 @@ export default function CompanySignup() {
         options: { emailRedirectTo: `${window.location.origin}/login` },
       });
       if (error) {
-        toast.error(/rate|limit/i.test(error.message) ? "محاولات كثيرة؛ حاول بعد قليل" : "تعذر إنشاء الحساب، حاول مرة أخرى");
+        console.error("signup failed", error.status, (error as { code?: string }).code, error.message);
+        toast.error(signupErrorText(error as { message?: string; code?: string; status?: number }), { duration: 10000 });
         return;
       }
       if (data.session) {
