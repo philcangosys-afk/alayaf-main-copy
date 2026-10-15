@@ -113,7 +113,7 @@ export default function RegisterCompany() {
         <div className="grid gap-4 sm:grid-cols-2">
           {field("name_ar", "اسم المنشأة بالعربية", { required: true })}
           {field("name_en", "اسم المنشأة بالإنجليزية", { ltr: true })}
-          {field("vat_number", "الرقم الضريبي", { ltr: true, placeholder: "3XXXXXXXXXXXXX3" })}
+          {field("vat_number", "الرقم الضريبي (لازم لإصدار فواتير المبيعات)", { ltr: true, placeholder: "3XXXXXXXXXXXXX3" })}
           {field("cr_number", "السجل التجاري", { ltr: true, placeholder: "10 أرقام" })}
           {field("contact_name", "اسم المسؤول")}
           {field("phone", "الجوال", { ltr: true, placeholder: "05XXXXXXXX" })}

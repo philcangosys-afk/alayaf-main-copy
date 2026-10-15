@@ -18,6 +18,8 @@ const zatcaStatusLabels: Record<string, string> = {
   rejected: "مرفوض من ZATCA",
   failed: "فشل الإرسال",
   ambiguous: "يتطلب مراجعة — لا تعد الإرسال",
+  // المرحلة الأولى (الإصدار والحفظ): رمز QR من النظام عند الإصدار، ولا إرسال للهيئة
+  phase1: "مرحلة أولى — بلا ربط",
 };
 
 // إشعار مرحّل لم تقبله الهيئة بعد ولا نتيجة غير محسومة له: تجوز إعادة إرساله
@@ -27,6 +29,9 @@ const ZATCA_SYNTHETIC_MARKER =
   /(?:^|[^A-Z])(?:TEST(?:ING)?|SIM(?:ULATION|ULATED|ULATOR)?)(?:[^A-Z]|$)|تجريب/i;
 const salesNoteErrorMessages: Array<[string, string]> = [
   ["SALES_NOTE_ORIGINAL_NOT_ACCEPTED", "الفاتورة الأصلية لم تقبلها الهيئة بعد؛ لا يُصدر إشعار عليها حتى تُبلَّغ"],
+  ["SALES_NOTE_ORIGINAL_PHASE1_AFTER_PHASE2", "الفاتورة الأصلية صدرت في المرحلة الأولى والمنشأة الآن في المرحلة الثانية؛ إشعارها غير متاح حاليًا"],
+  ["SALES_NOTE_ORIGINAL_PHASE2_WHILE_PHASE1", "الفاتورة الأصلية صدرت في مسار الربط مع الهيئة والمنشأة الآن في المرحلة الأولى؛ لا يصدر عليها إشعار"],
+  ["ZATCA_COMPANY_VAT_REQUIRED", "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر الإشعارات حتى تضيفه إدارة المنصة (حدّث الصفحة بعد إضافته). لم يُرحَّل الإشعار"],
   ["SALES_NOTE_ORIGINAL_NOT_POSTED", "الفاتورة الأصلية غير مرحّلة محاسبيًا"],
   ["SALES_NOTE_ORIGINAL_NOT_FOUND", "الفاتورة الأصلية غير موجودة"],
   ["SALES_NOTE_ORIGINAL_BUYER_DATA_INCOMPLETE", "بيانات العميل في الفاتورة الأصلية (العنوان الوطني أو الرقم الضريبي) لا تكفي للهيئة؛ لا يمكن إصدار إشعار عليها"],
@@ -213,6 +218,14 @@ const creditNoteTranslations: Record<string, string> = {
   "الإشعار مسجّل مسبقًا": "Note already recorded",
   "لم يُنشأ إشعار جديد؛ هذا هو الإشعار المسجّل من المحاولة السابقة.":
     "No new note was created; this is the note recorded by the previous attempt.",
+  "لا يمكن إصدار الإشعار": "Cannot issue the note",
+  "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر الإشعارات حتى تضيفه إدارة المنصة":
+    "The company VAT number is not registered; notes cannot be issued until the platform admin adds it",
+  "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر الإشعارات حتى تضيفه إدارة المنصة (حدّث الصفحة بعد إضافته). لم يُرحَّل الإشعار":
+    "The company VAT number is not registered; notes cannot be issued until the platform admin adds it (refresh the page afterwards). The note was not posted",
+  "الفاتورة الأصلية صدرت في مسار الربط مع الهيئة والمنشأة الآن في المرحلة الأولى؛ لا يصدر عليها إشعار":
+    "The original invoice was issued through ZATCA integration and the company is now in Phase 1; no note can be issued on it",
+  "تظهر فواتير المرحلة الأولى والفواتير المقبولة لدى الهيئة": "Phase 1 invoices and invoices accepted by ZATCA are listed",
 };
 
 type AccountingAccount = {
@@ -362,7 +375,7 @@ export default function SalesCreditNote() {
             .order("created_at", { ascending: false }),
           supabase
             .from("sales_invoices")
-            .select("id, customer, total, adjusted_total, accounting_status, zatca_status, uuid")
+            .select("id, customer, total, adjusted_total, accounting_status, zatca_status, uuid, zatca_phase")
             .eq("accounting_status", "posted")
             .order("date", { ascending: false }),
           supabase
@@ -417,11 +430,14 @@ export default function SalesCreditNote() {
       if (!invoicesResult.error) {
         setInvoices(
           (invoicesResult.data ?? [])
-            // القاعدة ترفض الإشعار على فاتورة لم تقبلها الهيئة؛ نعرض المقبولة فقط
+            // القاعدة ترفض الإشعار على فاتورة لم تقبلها الهيئة؛ نعرض المقبولة فقط،
+            // وفواتير المرحلة الأولى في المرحلتين (لم تُرسل للهيئة فلا قبول لها؛
+            // في المرحلة الثانية يُرسل إشعارها للهيئة بمرجع رقم الفاتورة فقط)
             .filter(
               (row: any) =>
-                ["reported", "cleared"].includes(String(row.zatca_status ?? "")) &&
-                String(row.uuid ?? "").trim() !== "",
+                (["reported", "cleared"].includes(String(row.zatca_status ?? "")) &&
+                  String(row.uuid ?? "").trim() !== "") ||
+                row.zatca_phase === "phase1",
             )
             .map((row: any) => ({
             id: String(row.id),
@@ -602,10 +618,23 @@ export default function SalesCreditNote() {
       return;
     }
 
-    const productionConfirmation = window.prompt(
-      "هذا إشعار إنتاج حقيقي وملزم قانونيًا لدى ZATCA. اكتب SUBMIT_REAL_ZATCA_INVOICE للمتابعة:",
-    );
-    if (productionConfirmation?.trim() !== "SUBMIT_REAL_ZATCA_INVOICE") {
+    // المرحلة الأولى: الإشعار لا يُرسل للهيئة، فلا يُطلب تأكيد الإرسال الحقيقي
+    const companyInPhase1 = COMPANY_PROFILE.zatcaPhase === "phase1";
+    // ورمز QR فيها إلزامي وفيه الرقم الضريبي، والقاعدة ترفض الإشعار دونه
+    if (companyInPhase1 && !COMPANY_PROFILE.vatNumber.trim()) {
+      toast({
+        title: t("لا يمكن إصدار الإشعار"),
+        description: t(salesNoteErrorText("ZATCA_COMPANY_VAT_REQUIRED")),
+        variant: "destructive",
+      });
+      return;
+    }
+    const productionConfirmation = companyInPhase1
+      ? ""
+      : window.prompt(
+          "هذا إشعار إنتاج حقيقي وملزم قانونيًا لدى ZATCA. اكتب SUBMIT_REAL_ZATCA_INVOICE للمتابعة:",
+        );
+    if (!companyInPhase1 && productionConfirmation?.trim() !== "SUBMIT_REAL_ZATCA_INVOICE") {
       toast({
         title: t("تم إلغاء الإرسال الحقيقي"),
         description: t("لم يتم إنشاء أو إرسال الإشعار إلى ZATCA."),
@@ -669,18 +698,36 @@ export default function SalesCreditNote() {
       // بيانات الإشعار كما حُفظت في القاعدة (قد يكون مسجّلًا من محاولة سابقة)
       const { data: postedNote } = await supabase
         .from("invoice_adjustment_notes")
-        .select("accounting_status, accounting_journal_entry_id, reason, items, balance_before, balance_after")
+        .select("accounting_status, accounting_journal_entry_id, reason, items, balance_before, balance_after, zatca_phase, zatca_status, qr_code_data")
         .eq("id", String(data))
         .single();
 
-      const zatca = await supabase.functions.invoke("zatca-invoice", {
-        body: {
-          noteId: String(data),
-          mode: "production",
-          deviceSerial: localStorage.getItem(zatcaDeviceSerialKey()),
-          productionConfirmation: productionConfirmation.trim(),
-        },
-      });
+      // مرحلة الإشعار تحددها القاعدة عند الإصدار: المرحلة الأولى لا تُرسل للهيئة.
+      // وإن ظنت الصفحة أن المنشأة في المرحلة الأولى (بلا تأكيد إرسال) فلا إرسال الآن؛ يُرسل من زر إعادة الإرسال
+      const notePhase1 = postedNote?.zatca_phase === "phase1";
+      const skipZatcaSubmit = notePhase1 || companyInPhase1;
+      if (!notePhase1 && companyInPhase1) {
+        toast({
+          title: t("المنشأة الآن في المرحلة الثانية"),
+          description: t("حُفظ الإشعار؛ أرسله للهيئة من زر إعادة الإرسال في القائمة."),
+        });
+      }
+      const zatca = skipZatcaSubmit
+        ? ({
+            data: {
+              status: String(postedNote?.zatca_status ?? (notePhase1 ? "phase1" : "pending")),
+              qrCodeData: String(postedNote?.qr_code_data ?? ""),
+            },
+            error: null,
+          } as Awaited<ReturnType<typeof supabase.functions.invoke>>)
+        : await supabase.functions.invoke("zatca-invoice", {
+            body: {
+              noteId: String(data),
+              mode: "production",
+              deviceSerial: localStorage.getItem(zatcaDeviceSerialKey()),
+              productionConfirmation: (productionConfirmation ?? "").trim(),
+            },
+          });
       // الحالة الفعلية من رد الدالة (مثل ambiguous) بدل افتراض "مرفوض" عند أي خطأ
       let zatcaFailureStatus = "rejected";
       if (zatca.error || zatca.data?.error) {
@@ -707,7 +754,7 @@ export default function SalesCreditNote() {
           ),
           variant: "destructive",
         });
-      } else {
+      } else if (!skipZatcaSubmit) {
         toast({ title: "ZATCA", description: String(zatca.data.message) });
       }
 
@@ -1017,7 +1064,9 @@ export default function SalesCreditNote() {
                                 ? "bg-emerald-100 text-emerald-700"
                                 : note.zatcaStatus === "rejected"
                                   ? "bg-rose-100 text-rose-700"
-                                  : "bg-slate-100 text-slate-600"
+                                  : note.zatcaStatus === "phase1"
+                                    ? "bg-sky-100 text-sky-700"
+                                    : "bg-slate-100 text-slate-600"
                             }`}
                           >
                             {t(
@@ -1121,16 +1170,23 @@ export default function SalesCreditNote() {
                 <ZatcaQrCode value={selectedNote.qrCodeData} size={112} />
               ) : (
                 <div className="flex h-28 w-28 items-center justify-center rounded border border-dashed border-border text-xs text-muted-foreground">
-                  {t("QR بعد الاعتماد")}
+                  {t(selectedNote.zatcaStatus === "phase1" ? "لا يوجد رقم ضريبي للمنشأة" : "QR بعد الاعتماد")}
                 </div>
               )}
               <p className="text-xs text-muted-foreground">
-                {t("يظهر رمز الاستجابة السريعة بعد قبول ZATCA للإشعار.")}
+                {selectedNote.zatcaStatus === "phase1"
+                  ? t("المرحلة الأولى: يُنشأ رمز الاستجابة السريعة عند إصدار الإشعار، ولا يُرسل للهيئة.")
+                  : t("يظهر رمز الاستجابة السريعة بعد قبول ZATCA للإشعار.")}
               </p>
             </div>
           </div>
         ) : (
           <>
+            {COMPANY_PROFILE.zatcaPhase === "phase1" && !COMPANY_PROFILE.vatNumber.trim() ? (
+              <div className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+                {t("الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر الإشعارات حتى تضيفه إدارة المنصة")}
+              </div>
+            ) : null}
             <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
               <div className="space-y-3 rounded-xl border border-border bg-card p-4">
                 <img
@@ -1200,7 +1256,10 @@ export default function SalesCreditNote() {
                       }}
                       className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
                     >
-                      <option value="">{t("اختر الفاتورة")} — {t("تظهر الفواتير المقبولة لدى الهيئة فقط")}</option>
+                      <option value="">
+                        {t("اختر الفاتورة")} —{" "}
+                        {t("تظهر فواتير المرحلة الأولى والفواتير المقبولة لدى الهيئة")}
+                      </option>
                       {invoices.map((invoice) => (
                         <option key={invoice.id} value={invoice.id}>
                           {invoice.id} — {invoice.customer} — {t("الرصيد")}{" "}

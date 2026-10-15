@@ -3,6 +3,7 @@ import Layout from "@/components/Layout";
 import { supabase } from "@/lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { COMPANY_PROFILE, PLATFORM_NAME_EN, zatcaDeviceSerialKey } from "@/lib/companyProfile";
+import ZatcaPhaseCard from "@/components/zatca/ZatcaPhaseCard";
 import {
   AlertCircle,
   Building2,
@@ -692,7 +693,7 @@ export default function ZATCASettings() {
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-sm font-semibold text-blue-700">
-              الفاتورة الإلكترونية — المرحلة الثانية
+              الفاتورة الإلكترونية (ZATCA)
             </p>
             <h1 className="mt-1 text-3xl font-bold text-slate-950">
               إعداد الربط مع ZATCA
@@ -713,6 +714,10 @@ export default function ZATCASettings() {
             تحديث الحالة
           </button>
         </header>
+
+        <ZatcaPhaseCard />
+
+        <h2 className="text-base font-bold text-slate-900">الربط مع الهيئة (المرحلة الثانية)</h2>
 
         <section className="grid gap-4 md:grid-cols-2">
           {[

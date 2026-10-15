@@ -380,6 +380,20 @@ function removeEmptyPartyIdentification(xml: string) {
   );
 }
 
+const BILLING_REFERENCE_BLOCK =
+  /<cac:InvoiceDocumentReference>[\s\S]*?<\/cac:InvoiceDocumentReference>/g;
+
+// The XML builder always writes <cbc:UUID> inside the billing reference. An
+// original issued in ZATCA Phase 1 was never reported, so it has no UUID at
+// ZATCA: the reference carries the original invoice number only (BT-25).
+// Drop the empty UUID element there; the other <cbc:UUID> elements (the
+// document UUID and the ICV) are outside this block and stay untouched.
+function removeEmptyBillingReferenceUuid(xml: string) {
+  return xml.replace(BILLING_REFERENCE_BLOCK, (block) =>
+    block.replace(/[ \t]*<cbc:UUID>\s*<\/cbc:UUID>\r?\n?/g, ""),
+  );
+}
+
 function buildSignedInvoice(input: {
   setup: any;
   invoice: any;
@@ -396,6 +410,8 @@ function buildSignedInvoice(input: {
   documentType: "invoice" | "creditNote" | "debitNote";
   originalInvoiceId?: string;
   originalInvoiceUuid?: string;
+  /** The original was issued in ZATCA Phase 1: reference its number without a UUID */
+  originalReferenceWithoutUuid?: boolean;
   credentials: { csid: string; secret: string };
 }) {
   const {
@@ -408,6 +424,7 @@ function buildSignedInvoice(input: {
     documentType,
     originalInvoiceId,
     originalInvoiceUuid,
+    originalReferenceWithoutUuid,
     credentials,
   } = input;
   const address = parseRegisteredAddress(String(setup.branch_location));
@@ -483,7 +500,9 @@ function buildSignedInvoice(input: {
   if (documentType !== "invoice") {
     document.addBillingReference({
       id: String(originalInvoiceId ?? invoice.id),
-      uuid: String(originalInvoiceUuid ?? crypto.randomUUID()),
+      uuid: originalReferenceWithoutUuid
+        ? ""
+        : String(originalInvoiceUuid ?? crypto.randomUUID()),
     });
     document.addPaymentMeans({
       code: "10",
@@ -496,9 +515,23 @@ function buildSignedInvoice(input: {
   }
   document.calculateTotals();
 
-  const unsignedXml = removeEmptyPartyIdentification(
-    new ZatcaInvoice().generateXml(document, uuid),
+  const unsignedXml = removeEmptyBillingReferenceUuid(
+    removeEmptyPartyIdentification(
+      new ZatcaInvoice().generateXml(document, uuid),
+    ),
   );
+  if (documentType !== "invoice" && originalReferenceWithoutUuid) {
+    // Phase 1 original: exactly one reference, to the original number, and no
+    // UUID in it. Anything else stops here, before signing or sending.
+    const references = unsignedXml.match(BILLING_REFERENCE_BLOCK) ?? [];
+    if (
+      references.length !== 1 ||
+      !references[0].includes(`<cbc:ID>${String(originalInvoiceId)}</cbc:ID>`) ||
+      /<cbc:UUID\b/.test(references[0])
+    ) {
+      throw new Error("PHASE1_BILLING_REFERENCE_INVALID");
+    }
+  }
   const certificate = createCompatibleCertificate(
     toCertificatePem(credentials.csid),
     String(setup.private_key_pem),
@@ -601,6 +634,17 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (recordError) throw recordError;
     if (!record) return respond({ error: "المستند غير موجود" }, 404);
+    // مستند المرحلة الأولى (الإصدار والحفظ): رمزه يُنشأ عند الإصدار ولا يُرسل للهيئة
+    if (clean(record.zatca_phase) === "phase1") {
+      return respond(
+        {
+          error: "هذا المستند صدر في المرحلة الأولى (الإصدار والحفظ)؛ لا يُرسل إلى ZATCA",
+          status: "phase1",
+          retryable: false,
+        },
+        409,
+      );
+    }
 
     const { data: existingLog, error: existingLogError } = await db("zatca_invoice_submission_logs")
       .select("*")
@@ -710,6 +754,10 @@ Deno.serve(async (req) => {
       if (linkedError) throw linkedError;
       originalInvoice = linked;
     }
+    // A Phase 1 original was never sent to ZATCA, so ZATCA holds no UUID for it:
+    // the note references the original invoice number only (any stored UUID is ignored)
+    const originalReferenceWithoutUuid =
+      Boolean(noteId) && clean(originalInvoice?.zatca_phase) === "phase1";
 
     const documentType: "invoice" | "creditNote" | "debitNote" = !noteId
       ? "invoice"
@@ -902,7 +950,11 @@ Deno.serve(async (req) => {
           422,
         );
       }
-      if (noteId && !clean(originalInvoice?.uuid)) {
+      if (
+        noteId &&
+        !clean(originalInvoice?.uuid) &&
+        !originalReferenceWithoutUuid
+      ) {
         return await rejectBeforeSubmission(
           "لا يمكن إرسال إشعار إنتاجي دون UUID فعلي للفاتورة الأصلية",
           422,
@@ -1100,6 +1152,7 @@ Deno.serve(async (req) => {
         documentType,
         originalInvoiceId: clean(record.original_invoice_id),
         originalInvoiceUuid: clean(originalInvoice?.uuid) || undefined,
+        originalReferenceWithoutUuid,
         credentials,
       });
       const requestPayload = {

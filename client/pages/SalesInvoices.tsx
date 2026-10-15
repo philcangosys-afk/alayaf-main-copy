@@ -56,6 +56,8 @@ const zatcaStatusLabels: Record<string, string> = {
   reported: "مُبلّغ لـ ZATCA",
   rejected: "مرفوض من ZATCA",
   ambiguous: "يتطلب مراجعة — لا تعد الإرسال",
+  // المرحلة الأولى (الإصدار والحفظ): رمز QR من النظام عند الإصدار، ولا إرسال للهيئة
+  phase1: "مرحلة أولى — بلا ربط",
 };
 
 const accountingStatusLabels: Record<string, string> = {
@@ -147,6 +149,7 @@ const salesInvoiceErrorMessages: Array<[string, string]> = [
   ["SALES_INVOICE_TAX_RATE_INVALID", "نسبة الضريبة لكل بند 15%"],
   ["SALES_INVOICE_TYPE_INVALID", "نوع الفاتورة يجب أن يكون معيارية أو مبسطة"],
   ["SALES_INVOICE_INVALID_CHARS", "اسم العميل أو العنوان أو وصف أحد البنود يحتوي محارف تحكم غير مرئية لا يقبلها ملف الهيئة؛ أعد كتابة النص"],
+  ["ZATCA_COMPANY_VAT_REQUIRED", "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر فواتير المبيعات حتى تضيفه إدارة المنصة (حدّث الصفحة بعد إضافته). لم تُحفظ الفاتورة"],
   ["ZATCA_RESEND_PERMISSION_REQUIRED", "إعادة الإرسال تتطلب صلاحية إدارة فواتير المبيعات"],
   ["ACCOUNTING_FISCAL_PERIOD_CLOSED", "الفترة المحاسبية لتاريخ اليوم مقفلة"],
   ["ACCOUNTING_FISCAL_PERIOD_REQUIRED", "لا توجد فترة محاسبية لتاريخ اليوم"],
@@ -402,6 +405,11 @@ const invoiceTranslations: Record<string, string> = {
   "فندي كوزوبد": "Fendi Kozobed",
   "إعدادات البند": "Item settings",
   "حذف البند": "Delete item",
+  "لا يمكن حفظ الفاتورة": "Cannot save the invoice",
+  "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر فواتير المبيعات حتى تضيفه إدارة المنصة":
+    "The company VAT number is not registered; sales invoices cannot be issued until the platform admin adds it",
+  "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر فواتير المبيعات حتى تضيفه إدارة المنصة (حدّث الصفحة بعد إضافته). لم تُحفظ الفاتورة":
+    "The company VAT number is not registered; sales invoices cannot be issued until the platform admin adds it (refresh the page afterwards). The invoice was not saved",
 };
 
 function useSalesInvoicesI18n() {
@@ -979,7 +987,7 @@ export default function SalesInvoices() {
               <div class="bottom">
                 <div>
                   <div class="qr-note">
-                    ${qrSvg ? `<div class="qr-box">${qrSvg}</div>` : `<div class="qr-box">${escapeHtml(t("QR بعد الاعتماد"))}</div>`}
+                    ${qrSvg ? `<div class="qr-box">${qrSvg}</div>` : `<div class="qr-box">${escapeHtml(t(invoice.zatcaStatus === "phase1" ? "لا يوجد رقم ضريبي للمنشأة" : "QR بعد الاعتماد"))}</div>`}
                     <div class="qr-text">${escapeHtml(t("تم ترميز هذا الرمز وفقاً لمتطلبات هيئة الزكاة والضريبة والجمارك للفوترة الإلكترونية"))}</div>
                   </div>
                   <div class="notes">
@@ -1254,7 +1262,9 @@ function InvoicesList({
                       ? "bg-rose-50 text-rose-700 border-rose-200"
                       : invoice.zatcaStatus === "ambiguous"
                         ? "bg-amber-50 text-amber-700 border-amber-200"
-                        : "bg-slate-50 text-slate-600 border-slate-200",
+                        : invoice.zatcaStatus === "phase1"
+                          ? "bg-sky-50 text-sky-700 border-sky-200"
+                          : "bg-slate-50 text-slate-600 border-slate-200",
                 )}
               >
                 {t(
@@ -1483,7 +1493,9 @@ function InvoiceDetails({
                         ? "bg-rose-50 text-rose-700"
                         : invoice.zatcaStatus === "ambiguous"
                           ? "bg-amber-50 text-amber-700"
-                          : "bg-slate-100 text-slate-700",
+                          : invoice.zatcaStatus === "phase1"
+                            ? "bg-sky-50 text-sky-700"
+                            : "bg-slate-100 text-slate-700",
                   )}
                 >
                   ZATCA:{" "}
@@ -2443,6 +2455,9 @@ function InvoiceForm({
   onPrint: (invoice: Invoice, targetWindow?: Window | null) => Promise<void>;
 }) {
   const { t, direction, formatNumber } = useSalesInvoicesI18n();
+  // المرحلة الأولى بلا رقم ضريبي للمنشأة: لا تصدر فواتير مبيعات (القاعدة ترفضها)
+  const companyVatMissing =
+    COMPANY_PROFILE.zatcaPhase === "phase1" && !COMPANY_PROFILE.vatNumber.trim();
   const [items, setItems] = useState([
     {
       id: 1,
@@ -2630,6 +2645,15 @@ function InvoiceForm({
 
   const handleSave = async (intent: "save" | "print") => {
     if (saveInFlight.current) return;
+    // المرحلة الأولى: رمز QR إلزامي وفيه الرقم الضريبي، والقاعدة ترفض الفاتورة دونه
+    if (companyVatMissing) {
+      toast({
+        title: t("لا يمكن حفظ الفاتورة"),
+        description: t(salesInvoiceErrorText("ZATCA_COMPANY_VAT_REQUIRED")),
+        variant: "destructive",
+      });
+      return;
+    }
     // الرقم الفعلي تحدده قاعدة البيانات عند الحفظ؛ المرسل للتوافق فقط
     const invoiceId = invoiceNumber || previewNextNumber(null, "INV", 6);
     if (!customer.trim()) {
@@ -2726,10 +2750,14 @@ function InvoiceForm({
       return;
     }
 
-    const productionConfirmation = window.prompt(
-      "هذه فاتورة إنتاج حقيقية وملزمة قانونيًا لدى ZATCA. اكتب SUBMIT_REAL_ZATCA_INVOICE للمتابعة:",
-    );
-    if (productionConfirmation?.trim() !== "SUBMIT_REAL_ZATCA_INVOICE") {
+    // المرحلة الأولى: الفاتورة لا تُرسل للهيئة، فلا يُطلب تأكيد الإرسال الحقيقي
+    const companyInPhase1 = COMPANY_PROFILE.zatcaPhase === "phase1";
+    const productionConfirmation = companyInPhase1
+      ? ""
+      : window.prompt(
+          "هذه فاتورة إنتاج حقيقية وملزمة قانونيًا لدى ZATCA. اكتب SUBMIT_REAL_ZATCA_INVOICE للمتابعة:",
+        );
+    if (!companyInPhase1 && productionConfirmation?.trim() !== "SUBMIT_REAL_ZATCA_INVOICE") {
       toast({
         title: t("تم إلغاء الإرسال الحقيقي"),
         description: t("لم يتم حفظ أو إرسال الفاتورة إلى ZATCA."),
@@ -2842,13 +2870,24 @@ function InvoiceForm({
             variant: "destructive",
           });
         }
-        const zatca = accountingPosted
-          ? await submitInvoiceToZatca(
-              savedInvoiceId,
-              productionConfirmation.trim(),
-              t,
-            )
-          : { status: "pending", qrCodeData: "" };
+        // مرحلة الفاتورة تحددها القاعدة عند الإصدار (مرحلة المنشأة وقتها)
+        const savedInPhase1 = data.zatca_phase === "phase1";
+        const zatca = savedInPhase1
+          ? { status: String(data.zatca_status ?? "phase1"), qrCodeData: String(data.qr_code_data ?? "") }
+          : accountingPosted && !companyInPhase1
+            ? await submitInvoiceToZatca(
+                savedInvoiceId,
+                (productionConfirmation ?? "").trim(),
+                t,
+              )
+            : { status: String(data.zatca_status ?? "pending"), qrCodeData: "" };
+        if (!savedInPhase1 && companyInPhase1) {
+          // انتقلت المنشأة للمرحلة الثانية أثناء فتح النموذج: الفاتورة محفوظة وتُرسل من زر إعادة الإرسال
+          toast({
+            title: t("المنشأة الآن في المرحلة الثانية"),
+            description: t("حُفظت الفاتورة؛ أرسلها للهيئة من زر إعادة الإرسال في قائمة الفواتير."),
+          });
+        }
         const savedInvoice: Invoice = {
           id: data.id ?? attemptId,
           date: data.date ?? issueDate,
@@ -2971,6 +3010,11 @@ function InvoiceForm({
       </div>
 
       <div className="p-4 space-y-6">
+        {companyVatMissing ? (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+            {t("الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر فواتير المبيعات حتى تضيفه إدارة المنصة")}
+          </div>
+        ) : null}
         <div className="rounded-2xl bg-white border border-border/50 shadow-sm overflow-hidden animate-fade-in-up">
           <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="rounded-xl border border-border/60 bg-muted/20 p-4 space-y-3">

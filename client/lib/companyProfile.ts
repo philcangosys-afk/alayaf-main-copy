@@ -34,7 +34,12 @@ export type CompanyRecord = {
   logo_url: string;
   employee_email_domain: string;
   status_reason: string;
+  /** مرحلة الفوترة الإلكترونية (S6): phase1 الإصدار والحفظ، phase2 الربط مع الهيئة */
+  zatca_phase?: ZatcaPhase;
+  zatca_phase_changed_at?: string | null;
 };
+
+export type ZatcaPhase = "phase1" | "phase2";
 
 /** آخر طلب تسجيل مرفوض لنفس البريد (يظهر لصاحبه عند التسجيل من جديد) */
 export type LastRejection = { name_ar: string; reason: string; at: string };
@@ -63,6 +68,8 @@ type CompanyProfile = {
   code: string;
   /** بادئة أرقام المستندات: "1001-" */
   docPrefix: string;
+  /** مرحلة الفوترة الإلكترونية للمنشأة (بلا قيمة من القاعدة = المرحلة الثانية كما كان) */
+  zatcaPhase: ZatcaPhase;
   bank: {
     beneficiaryAr: string;
     beneficiaryEn: string;
@@ -90,6 +97,7 @@ const emptyProfile = (): CompanyProfile => ({
   city: "",
   code: "",
   docPrefix: "",
+  zatcaPhase: "phase2",
   bank: {
     beneficiaryAr: "",
     beneficiaryEn: "",
@@ -126,6 +134,7 @@ export function applyCompanyProfile(company: CompanyRecord | null | undefined) {
     next.city = text(company.city);
     next.code = text(company.code);
     next.docPrefix = text(company.prefix) || (next.code ? `${next.code}-` : "");
+    next.zatcaPhase = company.zatca_phase === "phase1" ? "phase1" : "phase2";
     next.bank.beneficiaryAr = nameAr;
     next.bank.beneficiaryEn = nameEn;
     next.bank.nameAr = text(company.bank_name);

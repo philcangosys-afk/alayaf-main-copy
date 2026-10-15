@@ -53,7 +53,9 @@ export default function ZatcaQrCode({
             ? "يتطلب مراجعة — لا تعد الإرسال"
             : status === "rejected"
               ? "لم يتم إنشاء QR"
-              : "QR بعد اعتماد الفاتورة"}
+              : status === "phase1"
+                ? "لا يوجد رقم ضريبي للمنشأة"
+                : "QR بعد اعتماد الفاتورة"}
       </div>
     );
   }
