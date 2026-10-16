@@ -7,7 +7,9 @@ import { supabase } from "@/lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { useI18n } from "@/i18n";
 import { readUserSession } from "@/lib/authSession";
-import { hrRequestErrorText } from "@/lib/hrErrors";
+import { hrRequestErrorText, payrollApprovalErrorText } from "@/lib/hrErrors";
+import { freshnessErrorText, payrollRequestFreshness, type PayrollFreshness } from "@/lib/payrollFreshness";
+import PayrollFreshnessNotice from "@/components/hr/PayrollFreshnessNotice";
 import { isPendingStatus, normalizeRequestStatus } from "@/lib/hrStatus";
 import { daysInclusive } from "@/lib/hrDates";
 import { requestFormSchemas } from "@/components/hr/formSchemas";
@@ -40,7 +42,7 @@ const normalizeStatus = (raw: string) =>
 // مفاتيح داخلية في details لا تُعرض كمحتوى للطلب (بيانات الرواتب تُعرض في قسمها الخاص)
 const INTERNAL_DETAIL_KEYS = new Set([
   "workflow", "review_decision", "payroll_period", "employee_ids", "active_employee_ids", "stopped_employee_ids", "active_amounts", "stopped_amounts",
-  "employee_count", "active_employee_count", "stopped_employee_count", "stop_reason",
+  "employee_count", "active_employee_count", "stopped_employee_count", "stop_reason", "computed_on",
 ]);
 const isInternalDetailKey = (key: string) =>
   key.startsWith("reviewed_") || key.startsWith("sender_") || INTERNAL_DETAIL_KEYS.has(key);
@@ -75,6 +77,8 @@ export default function HRRequestsIncoming() {
   const [detailRequest, setDetailRequest] = useState<RequestRow | null>(null);
   const [payrollDetails, setPayrollDetails] = useState<PayrollDetailRow[]>([]);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  // طلب اعتماد الرواتب المفتوح: هل ما زال صافيه مطابقًا للحساب الآن (غياب أو جزاء أُدخل بعد الإرسال)
+  const [requestFreshness, setRequestFreshness] = useState<{ id: string; checking: boolean; error: string; result: PayrollFreshness | null } | null>(null);
   // التحديث الدوري: لا تداخل بين طلبين، والاستجابة الأقدم من آخر طلب تُهمل، ولا تحديث بعد مغادرة الصفحة
   const mountedRef = useRef(true);
   const inFlightRef = useRef(false);
@@ -172,6 +176,48 @@ export default function HRRequestsIncoming() {
 
       // طلب اعتماد الرواتب: القرار وأثره على صفوف الرواتب في عملية واحدة على الخادم (decide_payroll_request)،
       // فلا يبقى الطلب "موافق" وصفوفه معلقة إن لم يكن للمعتمِد صلاحية الرواتب. قبل تطبيق دفعة HR-7 يعود للطريقة السابقة.
+      // قبل الموافقة: لا يُعتمد صافٍ حُسب قبل آخر إدخال للحضور أو الغياب أو الجزاءات (وإلا صُرف الراتب القديم كاملًا)
+      if (isPayroll && status === "موافق") {
+        const allIds = Array.isArray(item.details.employee_ids) ? item.details.employee_ids.map(String) : employeeIds;
+        let check: PayrollFreshness | null = null;
+        let checkError = "";
+        try {
+          check = await payrollRequestFreshness(item.id, period, allIds, String(item.details.computed_on ?? ""));
+        } catch (error) {
+          checkError = t(freshnessErrorText(error) ?? payrollApprovalErrorText(error));
+        }
+        if (!mountedRef.current) return;
+        if (check && check.diffs.length > 0) {
+          setRequestFreshness({ id: item.id, checking: false, error: "", result: check });
+          const list = check.diffs
+            .slice(0, 5)
+            .map((diff) => `${diff.empId}: ${t("في الطلب")} ${formatNumber(diff.savedNet, { minimumFractionDigits: 2 })} / ${t("الآن")} ${formatNumber(diff.currentNet, { minimumFractionDigits: 2 })}`)
+            .join("، ");
+          toast({
+            title: t("لم يُعتمد الطلب: أرقامه قديمة"),
+            description: `${list}${check.diffs.length > 5 ? " …" : ""} — ${t("ارفض الطلب ليعيد مسؤول الرواتب إرساله بالأرقام الحالية")}`,
+            variant: "destructive",
+          });
+          return;
+        }
+        const unverified = check?.unverified ?? [];
+        if (checkError || unverified.length) {
+          if (check) setRequestFreshness({ id: item.id, checking: false, error: "", result: check });
+          const reason = checkError || `${t("تعذر التحقق من")}: ${unverified.slice(0, 10).join("، ")}${unverified.length > 10 ? " …" : ""}`;
+          if (!window.confirm(`${t("تعذر التحقق من مطابقة أرقام الطلب للحضور والغياب الحالي")}: ${reason}\n${t("هل تعتمد الأرقام كما أُرسلت؟")}`)) return;
+        }
+        // حضور أو غياب لأيام بعد يوم إرسال الطلب: لا يمنع الاعتماد، لكن يُسأل المعتمد
+        const later = check?.laterDiffs ?? [];
+        if (later.length) {
+          setRequestFreshness({ id: item.id, checking: false, error: "", result: check });
+          const list = later
+            .slice(0, 5)
+            .map((diff) => `${diff.empId}: ${t("في الطلب")} ${formatNumber(diff.savedNet, { minimumFractionDigits: 2 })} / ${t("الآن")} ${formatNumber(diff.currentNet, { minimumFractionDigits: 2 })}`)
+            .join("، ");
+          if (!window.confirm(`${t("سُجّل حضور أو غياب لأيام بعد يوم إرسال الطلب يغيّر الصافي")}: ${list}${later.length > 5 ? " …" : ""}\n${t("الأفضل رفض الطلب ليعيد مسؤول الرواتب إرساله. هل تعتمد الأرقام كما أُرسلت؟")}`)) return;
+        }
+      }
+
       if (isPayroll) {
         const { data: decided, error: decideError } = await supabase.rpc("decide_payroll_request", {
           p_request_id: item.id,
@@ -272,7 +318,20 @@ export default function HRRequestsIncoming() {
   const openRequestDetails = async (item: RequestRow) => {
     setDetailRequest(item);
     setPayrollDetails([]);
+    setRequestFreshness(null);
     if (item.details.workflow !== "payroll_approval") return;
+    if (item.status === "معلق") {
+      const checkPeriod = String(item.details.payroll_period ?? "");
+      const checkIds = Array.isArray(item.details.employee_ids) ? item.details.employee_ids.map(String) : [];
+      setRequestFreshness({ id: item.id, checking: true, error: "", result: null });
+      void payrollRequestFreshness(item.id, checkPeriod, checkIds, String(item.details.computed_on ?? ""))
+        .then((result) => {
+          if (mountedRef.current) setRequestFreshness((current) => (current?.id === item.id ? { id: item.id, checking: false, error: "", result } : current));
+        })
+        .catch((error) => {
+          if (mountedRef.current) setRequestFreshness((current) => (current?.id === item.id ? { id: item.id, checking: false, error: t(freshnessErrorText(error) ?? payrollApprovalErrorText(error)), result: null } : current));
+        });
+    }
 
     setDetailsLoading(true);
     const period = String(item.details.payroll_period ?? "");
@@ -474,7 +533,10 @@ export default function HRRequestsIncoming() {
                 </div>}
               </div>
               {detailRequest.details.workflow === "payroll_approval" && (
-                <div className="p-5">
+                <div className="space-y-3 p-5">
+                  {requestFreshness?.id === detailRequest.id && (
+                    <PayrollFreshnessNotice mode="approver" checking={requestFreshness.checking} error={requestFreshness.error} freshness={requestFreshness.result} />
+                  )}
                   {detailsLoading ? <p className="py-8 text-center text-gray-400">{t("جاري التحميل...")}</p> : (
                     <div className="overflow-x-auto rounded-lg border">
                       <table className="min-w-full text-sm">

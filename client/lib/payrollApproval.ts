@@ -16,6 +16,8 @@ type SubmitOptions = {
   stopReason?: string;
   /** سبب الإيقاف في طلبي السابق المحذوف: يُستخدم إن لم يُكتب سبب جديد */
   previousStopReason?: string;
+  /** تاريخ "اليوم" الذي حُسبت عليه الأرقام: يتحقق به المعتمد قبل الموافقة */
+  computedOn?: string;
 };
 
 const requestCodes = (details: unknown): string[] | null => {
@@ -108,7 +110,7 @@ export const resendPreparationOf = (preparation: PayrollResendPreparation | null
 // - يُحفظ في الطلب صافي كل موظف كما عُرض على المعتمد (active_amounts / stopped_amounts)؛
 //   الترحيل المحاسبي يرفض أي راتب تغيّر بعد موافقة الإدارة أو لم يدخل طلبًا موافقًا عليه.
 // - طلب فيه موقوفون فقط مسموح (اعتماد إيقافهم بعد أن اعتُمد الباقون).
-export async function submitPayrollApprovalRequest({ period, senderName, senderUserId, senderEmpId, activeIds, stoppedIds, carriedIds = [], stopReason, previousStopReason }: SubmitOptions) {
+export async function submitPayrollApprovalRequest({ period, senderName, senderUserId, senderEmpId, activeIds, stoppedIds, carriedIds = [], stopReason, previousStopReason, computedOn }: SubmitOptions) {
   const sendingSet = new Set([...activeIds, ...stoppedIds]);
   const carried = [...new Set(carriedIds)].filter((id) => id && !sendingSet.has(id));
   const targetIds = [...activeIds, ...stoppedIds, ...carried];
@@ -154,6 +156,7 @@ export async function submitPayrollApprovalRequest({ period, senderName, senderU
         active_employee_count: openActive.length,
         stopped_employee_count: openStopped.length,
         ...(openStopped.length && (stopReason?.trim() || previousStopReason?.trim()) ? { stop_reason: (stopReason?.trim() || previousStopReason?.trim() || "").slice(0, 300) } : {}),
+        ...(computedOn ? { computed_on: computedOn } : {}),
       },
     })
     .select("id")

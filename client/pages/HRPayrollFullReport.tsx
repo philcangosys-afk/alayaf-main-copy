@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Layout from "@/components/Layout";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabaseClient";
@@ -13,6 +13,8 @@ import { preparePayrollResend, resendPreparationOf, submitPayrollApprovalRequest
 import { payrollApprovalErrorText } from "@/lib/hrErrors";
 import { computePayroll, savePayrollRows, type PayrollComputation } from "@/lib/payrollCalc";
 import PayrollApprovalDialog from "@/components/hr/PayrollApprovalDialog";
+import PayrollFreshnessNotice from "@/components/hr/PayrollFreshnessNotice";
+import { freshnessErrorText, savedPayrollFreshness, type PayrollFreshness } from "@/lib/payrollFreshness";
 
 type ReportConfig = {
   period: string;
@@ -79,9 +81,19 @@ export default function HRPayrollFullReport() {
   const [showColumns, setShowColumns] = useState(false);
   const [visible, setVisible] = useState<Record<string, boolean>>(() => Object.fromEntries(columns.map((column) => [column.key, column.defaultVisible !== false])));
   const [filterNames, setFilterNames] = useState({ branch: "الكل", department: "الكل", section: "الكل", location: "الكل" });
+  // مطابقة الرواتب المحفوظة (طلب الاعتماد) مع الحساب الآن: غياب أو جزاء أُدخل بعد الإرسال
+  const [freshness, setFreshness] = useState<PayrollFreshness | null>(null);
+  const [freshnessChecking, setFreshnessChecking] = useState(false);
+  const [freshnessError, setFreshnessError] = useState("");
+  const freshnessSeq = useRef(0);
 
   useEffect(() => {
     const load = async () => {
+      // تحقق جديد لكل تحميل: يُمسح تنبيه التحميل السابق، ونتيجة تحقق أقدم لا تُعرض
+      const seq = ++freshnessSeq.current;
+      setFreshness(null);
+      setFreshnessError("");
+      setFreshnessChecking(false);
       if (!config?.period || !config.employeeIds.length) { setLoading(false); return; }
       setLoading(true);
       // الأرقام من الحساب الموحد (نفس كشف الرواتب وحساب الدوام)؛ بيانات البنك والوظيفة من ملف الموظف
@@ -128,6 +140,17 @@ export default function HRPayrollFullReport() {
       });
       setRows(prepared);
       setLoading(false);
+      // الحساب التقديري (مدخلات تعذر تحميلها) لا يُقارن
+      if (result.loadErrors.length || seq !== freshnessSeq.current) return;
+      setFreshnessChecking(true);
+      try {
+        const checked = await savedPayrollFreshness(result);
+        if (seq === freshnessSeq.current) setFreshness(checked);
+      } catch (error) {
+        if (seq === freshnessSeq.current) setFreshnessError(t(freshnessErrorText(error) ?? payrollApprovalErrorText(error)));
+      } finally {
+        if (seq === freshnessSeq.current) setFreshnessChecking(false);
+      }
     };
     void load();
   }, [config, t, reloadKey]);
@@ -178,6 +201,7 @@ export default function HRPayrollFullReport() {
         carriedIds: preparation.carried,
         stopReason: reason,
         previousStopReason: preparation.previousStopReason,
+        computedOn: fresh.computedOn,
       });
       setApprovalOpen(false);
       // يُعاد تحميل التقرير بالأرقام التي حُفظت وأُرسلت
@@ -238,6 +262,7 @@ export default function HRPayrollFullReport() {
       {computation && <p className="text-slate-500">{computation.policy.absenceBasis === "basic" ? t("قيمة يوم الغياب = الراتب الأساسي") : t("قيمة يوم الغياب = الراتب الأساسي + البدلات")} ÷ {computation.policy.dayDivisor === "actual" ? t("أيام الشهر الفعلية") : "30"} — {computation.policy.countUnrecordedAsAbsent ? t("أيام العمل بلا تسجيل حضور تُحتسب غيابًا (الراتب المكتسب حسب الحضور)") : t("يُخصم الغياب المسجّل في الحضور فقط")}</p>}
       {warnings.length > 0 && <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">{warnings.map((warning) => t(warning)).join(" | ")}</p>}
     </div>}
+    <PayrollFreshnessNotice mode="sender" checking={freshnessChecking} error={freshnessError} freshness={freshness} onResend={openApproval} resendDisabled={loading || approvalSubmitting || rows.length === 0} />
     <section id="payroll-full-report" className="overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
       <header className="border-b-2 border-[#075f94] p-5">
         <h1 className="text-center text-xl font-bold text-slate-900">{COMPANY_PROFILE.companyNameAr}</h1><h2 className="mt-1 text-center text-lg font-bold text-[#075f94]">{t("كشف الرواتب")}</h2>

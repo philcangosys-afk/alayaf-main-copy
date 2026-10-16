@@ -15,6 +15,8 @@ import { preparePayrollResend, resendPreparationOf, submitPayrollApprovalRequest
 import { payrollApprovalErrorText } from "@/lib/hrErrors";
 import { computePayroll, savePayrollRows, type PayrollComputation, type PayrollLine } from "@/lib/payrollCalc";
 import PayrollApprovalDialog from "@/components/hr/PayrollApprovalDialog";
+import PayrollFreshnessNotice from "@/components/hr/PayrollFreshnessNotice";
+import { freshnessErrorText, savedPayrollFreshness, type PayrollFreshness } from "@/lib/payrollFreshness";
 
 type EmpLite = {
   id: string;
@@ -86,6 +88,10 @@ export default function HRPayrollStatement() {
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [computing, setComputing] = useState(false);
   const [computation, setComputation] = useState<PayrollComputation | null>(null);
+  // مطابقة الرواتب المحفوظة (طلب الاعتماد) مع الحساب المعروض: غياب أو جزاء أُدخل بعد الإرسال
+  const [freshness, setFreshness] = useState<PayrollFreshness | null>(null);
+  const [freshnessChecking, setFreshnessChecking] = useState(false);
+  const [freshnessError, setFreshnessError] = useState("");
 
   const [approvalDepartment, setApprovalDepartment] = useState("الكل");
   const [approvalSection, setApprovalSection] = useState("الكل");
@@ -224,6 +230,23 @@ export default function HRPayrollStatement() {
     () => (computation && computation.period === period ? Object.fromEntries(computation.lines) : {}),
     [computation, period],
   );
+
+  useEffect(() => {
+    setFreshness(null);
+    setFreshnessError("");
+    // الحساب التقديري (مدخلات تعذر تحميلها) لا يُقارن، ولا أثناء الإرسال (الصفوف تُحفظ الآن؛ يُعاد التحقق بعده)
+    if (pageMode !== "report" || approvalSubmitting || !computation || computation.period !== period || computation.loadErrors.length) {
+      setFreshnessChecking(false);
+      return;
+    }
+    let active = true;
+    setFreshnessChecking(true);
+    savedPayrollFreshness(computation)
+      .then((result) => { if (active) setFreshness(result); })
+      .catch((error) => { if (active) setFreshnessError(t(freshnessErrorText(error) ?? payrollApprovalErrorText(error))); })
+      .finally(() => { if (active) setFreshnessChecking(false); });
+    return () => { active = false; };
+  }, [computation, period, pageMode, approvalSubmitting, t]);
 
   // "اختيار الموظفين (تفصيلي)": يحسب ويعرض الكشف فقط؛ لا يُكتب شيء في الرواتب قبل إرسال طلب الاعتماد
   const handleGenerate = async () => {
@@ -389,7 +412,7 @@ export default function HRPayrollStatement() {
             if (code !== undefined) notStarted.set(id, code);
           }
         });
-        return { ...current, policy: fresh.policy, lines, employees, notStarted, warnings: fresh.warnings, loadErrors: fresh.loadErrors };
+        return { ...current, policy: fresh.policy, lines, employees, notStarted, warnings: fresh.warnings, loadErrors: fresh.loadErrors, computedOn: fresh.computedOn };
       });
       if (fresh.loadErrors.length) throw new Error(`PAYROLL_INPUTS_INCOMPLETE: ${fresh.loadErrors.join(" | ")}`);
       const codeOf = (id: string) => fresh.employees.get(id)?.empId.trim() ?? "";
@@ -413,6 +436,7 @@ export default function HRPayrollStatement() {
         carriedIds: preparation.carried,
         stopReason: reason,
         previousStopReason: preparation.previousStopReason,
+        computedOn: fresh.computedOn,
       });
 
       toast({
@@ -585,6 +609,7 @@ export default function HRPayrollStatement() {
               {computation && computation.warnings.length > 0 && (
                 <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{computation.warnings.map((warning) => t(warning)).join(" | ")}</p>
               )}
+              <PayrollFreshnessNotice mode="sender" checking={freshnessChecking} error={freshnessError} freshness={freshness} onResend={handleOpenApproval} resendDisabled={approvalSubmitting} />
             </div>
 
             <div className="overflow-x-auto">

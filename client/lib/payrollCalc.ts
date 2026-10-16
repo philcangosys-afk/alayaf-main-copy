@@ -473,6 +473,8 @@ export type PayrollComputation = {
   loadErrors: string[];
   /** موظفون تاريخ تعيينهم بعد نهاية الشهر (بمعرّفاتهم → الرقم الوظيفي): لا سطر ولا صف جديد لهم */
   notStarted: Map<string, string>;
+  /** تاريخ "اليوم" الذي حُسب عليه الكشف (الأيام بعده لا تُعد): يُحفظ مع طلب الاعتماد ليتحقق المعتمد بالتاريخ نفسه */
+  computedOn: string;
 };
 
 /** قيمة "مدفوعة" في نوع الإجازة تساوي لا */
@@ -540,9 +542,10 @@ async function loadEmployees(ids: string[]): Promise<Record<string, unknown>[]> 
 }
 
 /** يحسب رواتب الفترة لموظفين محددين (بمعرّفاتهم). أخطاء الحضور والجزاءات والإضافي توقف الحساب؛ لا يُعرض راتب ناقص بصمت. */
-export async function computePayroll(employeeIds: string[], period: string): Promise<PayrollComputation> {
+export async function computePayroll(employeeIds: string[], period: string, options: { today?: string } = {}): Promise<PayrollComputation> {
   const { from, to } = monthRange(period);
-  const today = riyadhToday();
+  // اليوم بتوقيت الرياض، أو يوم إرسال طلب الاعتماد عند تحقق المعتمد منه
+  const today = /^\d{4}-\d{2}-\d{2}$/.test(String(options.today ?? "")) ? String(options.today) : riyadhToday();
   const warnings: string[] = [];
   const loadErrors: string[] = [];
   const ids = [...new Set(employeeIds.filter(Boolean))];
@@ -806,7 +809,7 @@ export async function computePayroll(employeeIds: string[], period: string): Pro
   if (notStarted.size) warnings.push(`${notStarted.size} موظف تاريخ تعيينه بعد نهاية الشهر؛ لم يُحسب له راتب في هذه الفترة`);
   if (missingSchedules) warnings.push(`${missingSchedules} موظف مرتبط بجدول دوام غير موجود؛ اعتُبرت أيام عملهم من الأحد إلى الخميس`);
 
-  return { period, policy, employees, lines, warnings, loadErrors, notStarted };
+  return { period, policy, employees, lines, warnings, loadErrors, notStarted, computedOn: today };
 }
 
 // ---------------------------------------------------------------------------
