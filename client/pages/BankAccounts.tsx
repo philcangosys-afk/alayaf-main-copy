@@ -13,6 +13,46 @@ type ParsedLine = { date: string; valueDate: string; reference: string; descript
 
 const numeric = (value: unknown) => Number(String(value ?? "").replace(/,/g, "").trim()) || 0;
 const normalizeHeader = (value: string) => value.trim().toLowerCase().replace(/\s+/g, "_");
+const latinDigits = (value: string) =>
+  value
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+
+// تاريخ الحركة كما في كشف البنك: يوم/شهر/سنة (صيغة البنوك السعودية) أو سنة-شهر-يوم، ويُرسل بصيغة ISO.
+// لا يُترك للقاعدة تفسيره (قد تقرأ 05/10/2026 على أنه 10 مايو). تاريخ غير صالح يعيد نصًا فارغًا.
+function normalizeStatementDate(raw: string | undefined) {
+  const value = latinDigits(String(raw ?? "").trim()).split(/[\sT]/)[0];
+  let parts = value.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
+  let year: number;
+  let month: number;
+  let day: number;
+  if (parts) {
+    year = Number(parts[1]); month = Number(parts[2]); day = Number(parts[3]);
+  } else {
+    parts = value.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (!parts) return "";
+    day = Number(parts[1]); month = Number(parts[2]); year = Number(parts[3]);
+  }
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+// رسائل الاستيراد بالعربية بدل رموز الخطأ
+function importErrorText(message: string) {
+  const row = message.match(/BANK_STATEMENT_ROW_INVALID:(\d+)/);
+  if (row) return `السطر ${row[1]} في الملف: التاريخ غير صحيح (المقبول يوم/شهر/سنة أو سنة-شهر-يوم)، أو الحركة ليست مدينة فقط أو دائنة فقط`;
+  if (message.includes("BANK_STATEMENT_CSV_EMPTY")) return "الملف فارغ أو ليس فيه أسطر حركات";
+  if (message.includes("BANK_STATEMENT_COLUMNS_INVALID")) return "أعمدة الملف غير معروفة: يلزم عمود التاريخ (date أو التاريخ) وعمود مدين/دائن أو المبلغ";
+  if (message.includes("file_hash") || message.includes("duplicate key")) return "هذا الكشف مستورد من قبل لهذا الحساب";
+  if (message.includes("BANK_LINE_DATE_OUTSIDE_STATEMENT")) return "في الملف حركة تاريخها خارج فترة الكشف المحددة";
+  if (message.includes("BANK_LINE_DEBIT_CREDIT_INVALID")) return "كل حركة يجب أن تكون مدينة فقط أو دائنة فقط";
+  if (message.includes("BANK_STATEMENT_DATE_RANGE_INVALID")) return "فترة الكشف غير صحيحة";
+  if (message.includes("BANK_ACCOUNT_NOT_FOUND_OR_INACTIVE")) return "الحساب البنكي غير موجود أو موقوف";
+  if (message.includes("ACCOUNTING_MANAGE_PERMISSION_REQUIRED")) return "الاستيراد يتطلب صلاحية إدارة المحاسبة";
+  if (message.includes("statement timeout")) return "الملف كبير؛ قسّمه إلى ملفات أصغر ثم استوردها";
+  return message;
+}
 
 function parseCsvRow(row: string) {
   const values: string[] = [];
@@ -44,13 +84,14 @@ function parseStatementCsv(text: string): ParsedLine[] {
   const balanceIndex = indexOf("balance", "الرصيد");
   if (dateIndex < 0 || (debitIndex < 0 && creditIndex < 0 && amountIndex < 0)) throw new Error("BANK_STATEMENT_COLUMNS_INVALID");
 
-  return rows.slice(1).map((row) => {
+  return rows.slice(1).map((row, index) => {
     const cells = parseCsvRow(row);
     const signedAmount = amountIndex >= 0 ? numeric(cells[amountIndex]) : 0;
     const debit = debitIndex >= 0 ? numeric(cells[debitIndex]) : signedAmount < 0 ? Math.abs(signedAmount) : 0;
     const credit = creditIndex >= 0 ? numeric(cells[creditIndex]) : signedAmount > 0 ? signedAmount : 0;
-    if (!cells[dateIndex] || !((debit > 0 && credit === 0) || (credit > 0 && debit === 0))) throw new Error("BANK_STATEMENT_ROW_INVALID");
-    return { date: cells[dateIndex], valueDate: valueDateIndex >= 0 ? cells[valueDateIndex] ?? "" : "", reference: referenceIndex >= 0 ? cells[referenceIndex] ?? "" : "", description: descriptionIndex >= 0 ? cells[descriptionIndex] ?? "" : "", debit, credit, balance: balanceIndex >= 0 && cells[balanceIndex] ? numeric(cells[balanceIndex]) : null };
+    const date = normalizeStatementDate(cells[dateIndex]);
+    if (!date || !((debit > 0 && credit === 0) || (credit > 0 && debit === 0))) throw new Error(`BANK_STATEMENT_ROW_INVALID:${index + 2}`);
+    return { date, valueDate: valueDateIndex >= 0 ? normalizeStatementDate(cells[valueDateIndex]) : "", reference: referenceIndex >= 0 ? cells[referenceIndex] ?? "" : "", description: descriptionIndex >= 0 ? cells[descriptionIndex] ?? "" : "", debit, credit, balance: balanceIndex >= 0 && cells[balanceIndex] ? numeric(cells[balanceIndex]) : null };
   });
 }
 
@@ -118,7 +159,10 @@ export default function BankAccounts() {
       const { error: importError } = await supabase.rpc("import_accounting_bank_statement", { p_bank_account_id: importAccountId, p_file_name: file.name, p_statement_from: statementFrom, p_statement_to: statementTo, p_opening_balance: openingBalance === "" ? null : numeric(openingBalance), p_closing_balance: closingBalance === "" ? null : numeric(closingBalance), p_lines: parsed });
       if (importError) throw importError;
       setShowImport(false); setSelectedAccountId(importAccountId); await load();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : t("تعذر استيراد كشف الحساب")); }
+    } catch (caught) {
+      const message = String((caught as { message?: unknown } | null)?.message ?? "");
+      setError(message ? t(importErrorText(message)) : t("تعذر استيراد كشف الحساب"));
+    }
     finally { setSaving(false); }
   };
 

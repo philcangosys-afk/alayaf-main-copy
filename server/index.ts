@@ -2,11 +2,6 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { handleDemo } from "./routes/demo";
-import {
-  handleComplianceCheck,
-  handleReport,
-  handleClear,
-} from "./routes/zatca";
 
 export function createServer() {
   const app = express();
@@ -24,10 +19,8 @@ export function createServer() {
 
   app.get("/api/demo", handleDemo);
 
-  // ZATCA invoice relays. Secure onboarding runs only in the authenticated Edge Function.
-  app.post("/api/zatca/compliance-check", handleComplianceCheck);
-  app.post("/api/zatca/report", handleReport);
-  app.post("/api/zatca/clear", handleClear);
+  // ZATCA: signing and sending run only in the authenticated Edge Function
+  // (supabase/functions/zatca-invoice). The old unauthenticated /api/zatca/* relay was removed.
 
   return app;
 }
