@@ -24,6 +24,24 @@ export const CATEGORY_COLORS: Record<string, { bg: string; text: string; border:
 
 export const CASH_FLOW_TYPES = ["التشغيليات", "الاستثمارات", "التمويليات", "نقد"] as const;
 
+/**
+ * هل يقبل الحساب أن يُضاف تحته حساب بنكي أو صندوق؟
+ * نفس قاعدة الخادم (save_accounting_bank_account): داخل «النقد وما يعادله» (111) وليس تحت الشيكات (1112).
+ */
+export function canHoldBankOrCash(code: string, accounts: Pick<AccountNode, "code" | "parentCode">[]): boolean {
+  const byCode = new Map(accounts.map((account) => [account.code, account]));
+  const seen = new Set<string>();
+  let current: string | undefined = code;
+  let insideCash = false;
+  while (current && !seen.has(current)) {
+    if (current === "1112") return false;
+    if (current === "111") insideCash = true;
+    seen.add(current);
+    current = byCode.get(current)?.parentCode || undefined;
+  }
+  return insideCash;
+}
+
 export const ACCOUNT_TYPES = ["التشغيليات", "الاستثمارات", "التمويليات"] as const;
 
 export const defaultAccounts: AccountNode[] = [

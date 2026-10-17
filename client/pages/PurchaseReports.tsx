@@ -34,6 +34,7 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { PageHeader, FilterInput } from "@/components/SalesPageUI";
 import PurchaseReportDetails from "@/components/purchases/PurchaseReportDetails";
+import { riyadhDateString } from "@/lib/utils";
 
 /* ── Types ── */
 type ReportItem = {
@@ -176,10 +177,8 @@ function ReportModal({
   onClose: () => void;
 }) {
   const { t, direction, formatDate, formatNumber } = useI18n();
-  const [dateFrom, setDateFrom] = useState(
-    new Date(Date.now() - 30 * 86400000).toISOString().split("T")[0]
-  );
-  const [dateTo, setDateTo] = useState(new Date().toISOString().split("T")[0]);
+  const [dateFrom, setDateFrom] = useState(() => riyadhDateString(-30));
+  const [dateTo, setDateTo] = useState(() => riyadhDateString());
   const [vendor, setVendor] = useState("الكل");
   const [status, setStatus] = useState("الكل");
 

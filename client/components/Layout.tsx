@@ -56,6 +56,10 @@ import { useRolePermissions } from "@/hooks/useRolePermissions";
 import ReadOnlyBoundary from "@/components/permissions/ReadOnlyBoundary";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
+
+/** اسم المنشأة بلغة الواجهة: الإنجليزي في الواجهة الإنجليزية إن وُجد، وإلا العربي */
+const companyDisplayName = (locale: string) =>
+  (locale === "en" && COMPANY_PROFILE.companyNameEn?.trim()) || COMPANY_PROFILE.companyNameAr;
 import { useCompany } from "@/lib/companyContext";
 import QuickActionsBar from "@/components/QuickActionsBar";
 
@@ -996,7 +1000,7 @@ function MainSidebar({
   const navRef = useRef<HTMLElement>(null);
   const userSession = readUserSession();
   const { permissions: livePerms } = useRolePermissions();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
 
   // Restore scroll position on mount
   useEffect(() => {
@@ -1119,7 +1123,7 @@ function MainSidebar({
                   {t(COMPANY_PROFILE.programNameAr)}
                 </span>
                 <span className="text-[10px] font-medium text-blue-300/60 tracking-wide">
-                  {COMPANY_PROFILE.companyNameAr}
+                  {companyDisplayName(locale)}
                 </span>
               </div>
             )}
@@ -1373,7 +1377,7 @@ export default function Layout({ children }: LayoutProps) {
   useCompany();
   const location = useLocation();
   const { permissions: livePerms } = useRolePermissions();
-  const { t, direction, formatDate } = useI18n();
+  const { t, direction, formatDate, locale } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [expandedHRMenus, setExpandedHRMenus] = useState<Set<string>>(() => {
     const parent = getActiveHRParent(location.pathname);
@@ -1440,7 +1444,7 @@ export default function Layout({ children }: LayoutProps) {
         <header className="sticky top-0 z-40 h-[68px] flex items-center justify-between px-8 bg-white/80 backdrop-blur-xl border-b border-border/40 shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
           <div className="flex items-center gap-4">
             <h1 className="text-[16px] font-extrabold text-foreground">
-              {COMPANY_PROFILE.companyNameAr || t(COMPANY_PROFILE.programNameAr)}
+              {companyDisplayName(locale) || t(COMPANY_PROFILE.programNameAr)}
             </h1>
             <span className="hidden sm:inline-block h-5 w-px bg-border/60" />
             <span className="hidden sm:inline-block text-[11px] text-muted-foreground font-bold">

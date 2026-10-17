@@ -8,6 +8,7 @@ import ChartOfAccountsTree from "@/components/chart-of-accounts/ChartOfAccountsT
 import CostCenters from "@/components/chart-of-accounts/CostCenters";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
+import { riyadhDateString } from "@/lib/utils";
 
 type VoucherRow = {
   id: string;
@@ -97,7 +98,7 @@ const VOUCHERS_READ_ONLY = true;
 const getEmptyVoucherForm = (): VoucherForm => ({
   id: undefined,
   voucherNumber: "",
-  voucherDate: new Date().toISOString().split("T")[0],
+  voucherDate: riyadhDateString(),
   description: "",
   department: "",
   approvedBy: "",
@@ -107,7 +108,7 @@ const getEmptyVoucherForm = (): VoucherForm => ({
 const getEmptyPettyCashForm = (): PettyCashForm => ({
   id: undefined,
   voucherNumber: "",
-  voucherDate: new Date().toISOString().split("T")[0],
+  voucherDate: riyadhDateString(),
   beneficiaryName: "",
   purpose: "",
   amount: "",

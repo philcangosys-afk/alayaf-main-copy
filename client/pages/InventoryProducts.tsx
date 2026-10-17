@@ -21,10 +21,19 @@ type Product = {
   active: boolean;
 };
 
+// الحسابات الافتراضية للصنف الجديد إن وُجدت في دليل المنشأة كحسابات طرفية:
+// 1151 مخزون البضاعة، 513 تكلفة البضاعة المباعة (وإلا 511 كما كان سابقًا)، 411 الإيراد
+const DEFAULT_INVENTORY_ACCOUNTS = ["1151"];
+const DEFAULT_COGS_ACCOUNTS = ["513", "511"];
+const DEFAULT_REVENUE_ACCOUNTS = ["411"];
+// مستخدم المخزون فقط قد لا يقرأ دليل الحسابات: تُستخدم الحسابات الافتراضية السابقة حتى يستطيع الحفظ
+const LEGACY_DEFAULT_ACCOUNTS = { inventory: "1151", cogs: "511", revenue: "411" };
+
 export default function InventoryProducts() {
   const { t, direction } = useI18n();
   const [products, setProducts] = useState<Product[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -34,9 +43,9 @@ export default function InventoryProducts() {
   const [nameEn, setNameEn] = useState("");
   const [itemType, setItemType] = useState<"product" | "service">("product");
   const [unit, setUnit] = useState("قطعة");
-  const [inventoryAccount, setInventoryAccount] = useState("1151");
-  const [cogsAccount, setCogsAccount] = useState("511");
-  const [revenueAccount, setRevenueAccount] = useState("411");
+  const [inventoryAccount, setInventoryAccount] = useState("");
+  const [cogsAccount, setCogsAccount] = useState("");
+  const [revenueAccount, setRevenueAccount] = useState("");
   const [active, setActive] = useState(true);
 
   const load = async () => {
@@ -46,14 +55,15 @@ export default function InventoryProducts() {
       selectAllRows((from, to) => supabase.from("inventory_products").select("id, sku, name_ar, name_en, item_type, unit, inventory_account_code, cogs_account_code, revenue_account_code, active").order("sku").order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("accounting_accounts").select("code, name_ar, parent_code").order("code").range(from, to)),
     ]);
-    const firstError = productResult.error ?? accountResult.error;
-    if (firstError) {
-      setError(inventoryErrorText(firstError.message, t));
+    if (productResult.error) {
+      setError(inventoryErrorText(productResult.error.message, t));
       setLoading(false);
       return;
     }
-    const allAccounts = (accountResult.data ?? []) as Account[];
+    // تعذر قراءة الدليل (صلاحية) لا يمنع عرض الأصناف: تبقى القائمة فارغة وتُستخدم الحسابات الافتراضية السابقة
+    const allAccounts = (accountResult.error ? [] : accountResult.data ?? []) as Account[];
     setAccounts(allAccounts.filter((account) => !allAccounts.some((child) => child.parent_code === account.code)));
+    setAccountsLoaded(true);
     setProducts((productResult.data ?? []).map((row) => ({
       id: String(row.id),
       sku: String(row.sku),
@@ -63,7 +73,7 @@ export default function InventoryProducts() {
       unit: String(row.unit),
       inventoryAccountCode: String(row.inventory_account_code ?? ""),
       cogsAccountCode: String(row.cogs_account_code ?? ""),
-      revenueAccountCode: String(row.revenue_account_code),
+      revenueAccountCode: String(row.revenue_account_code ?? ""),
       active: Boolean(row.active),
     })));
     setLoading(false);
@@ -77,16 +87,33 @@ export default function InventoryProducts() {
     active: products.filter((item) => item.active).length,
   }), [products]);
 
+  // أول حساب طرفي موجود من القائمة المفضلة، وإلا يبقى الاختيار فارغًا ليحدده المستخدم.
+  // دليل غير مقروء (بلا صفوف): الحسابات الافتراضية السابقة 1151/511/411
+  const defaultAccounts = useMemo(() => {
+    if (!accountsLoaded) return { inventory: "", cogs: "", revenue: "" };
+    if (accounts.length === 0) return LEGACY_DEFAULT_ACCOUNTS;
+    const pick = (codes: string[]) => codes.find((code) => accounts.some((account) => account.code === code)) ?? "";
+    return { inventory: pick(DEFAULT_INVENTORY_ACCOUNTS), cogs: pick(DEFAULT_COGS_ACCOUNTS), revenue: pick(DEFAULT_REVENUE_ACCOUNTS) };
+  }, [accounts, accountsLoaded]);
+  // إن فُتح نموذج صنف جديد قبل اكتمال تحميل الدليل تُملأ الحسابات الفارغة عند وصوله
+  useEffect(() => {
+    if (editingId !== null) return;
+    setInventoryAccount((current) => current || defaultAccounts.inventory);
+    setCogsAccount((current) => current || defaultAccounts.cogs);
+    setRevenueAccount((current) => current || defaultAccounts.revenue);
+  }, [defaultAccounts]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const reset = () => {
     setEditingId(undefined);
     setSku(""); setNameAr(""); setNameEn(""); setItemType("product"); setUnit("قطعة");
-    setInventoryAccount("1151"); setCogsAccount("511"); setRevenueAccount("411"); setActive(true); setError("");
+    setInventoryAccount(defaultAccounts.inventory); setCogsAccount(defaultAccounts.cogs); setRevenueAccount(defaultAccounts.revenue); setActive(true); setError("");
   };
   const startNew = () => { reset(); setEditingId(null); };
   const startEdit = (product: Product) => {
+    // التعديل يبقي حسابات الصنف المحفوظة؛ الافتراضي فقط لحساب فارغ (خدمة تتحول إلى منتج مخزني)
     setEditingId(product.id); setSku(product.sku); setNameAr(product.nameAr); setNameEn(product.nameEn);
-    setItemType(product.itemType); setUnit(product.unit); setInventoryAccount(product.inventoryAccountCode || "1151");
-    setCogsAccount(product.cogsAccountCode || "511"); setRevenueAccount(product.revenueAccountCode); setActive(product.active); setError("");
+    setItemType(product.itemType); setUnit(product.unit); setInventoryAccount(product.inventoryAccountCode || defaultAccounts.inventory);
+    setCogsAccount(product.cogsAccountCode || defaultAccounts.cogs); setRevenueAccount(product.revenueAccountCode); setActive(product.active); setError("");
   };
 
   const save = async () => {
@@ -119,14 +146,19 @@ export default function InventoryProducts() {
     toast({ title: t("تم حذف الصنف") }); await load();
   };
 
-  const AccountSelect = ({ label, value, onChange, prefix }: { label: string; value: string; onChange: (value: string) => void; prefix: string }) => (
-    <label className="text-xs text-slate-600">{t(label)}
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 h-10 w-full rounded border px-2 text-sm">
-        <option value="">{t("اختر حسابًا طرفيًا")}</option>
-        {accounts.filter((account) => account.code.startsWith(prefix)).map((account) => <option key={account.code} value={account.code}>{account.code} — {account.name_ar}</option>)}
-      </select>
-    </label>
-  );
+  const AccountSelect = ({ label, value, onChange, prefix }: { label: string; value: string; onChange: (value: string) => void; prefix: string }) => {
+    const options = accounts.filter((account) => account.code.startsWith(prefix));
+    return (
+      <label className="text-xs text-slate-600">{t(label)}
+        <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 h-10 w-full rounded border px-2 text-sm">
+          <option value="">{t("اختر حسابًا طرفيًا")}</option>
+          {/* الحساب المحفوظ أو الافتراضي يظهر ولو لم يكن الدليل مقروءًا */}
+          {value && !options.some((account) => account.code === value) && <option value={value}>{value}</option>}
+          {options.map((account) => <option key={account.code} value={account.code}>{account.code} — {account.name_ar}</option>)}
+        </select>
+      </label>
+    );
+  };
 
   return <Layout><main dir={direction} className="space-y-5">
     <header className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-white p-5 shadow-sm">

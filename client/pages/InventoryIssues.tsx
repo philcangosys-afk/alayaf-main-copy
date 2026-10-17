@@ -15,6 +15,7 @@ type Warehouse = { id: string; code: string; name: string };
 type Customer = { id: string; number: string; name: string };
 type SalesInvoice = { id: string; customerId: string; customer: string };
 type Balance = { productId: string; warehouseId: string; quantity: number; value: number };
+type Account = { code: string; name: string };
 type IssueLine = { id: number; productId: string; quantity: string; unitCost: string };
 type InventoryIssue = {
   id: string;
@@ -27,6 +28,8 @@ type InventoryIssue = {
   destination: string;
   reference: string;
   notes: string;
+  // حساب المصروف للصرف الداخلي فقط؛ الفارغ يعني تكلفة المبيعات للصنف
+  expenseAccountCode: string;
   status: "draft" | "posted";
   accountingStatus: "pending" | "posted" | "not_required";
   journalEntryId: string;
@@ -46,6 +49,8 @@ export default function InventoryIssues() {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [invoices, setInvoices] = useState<SalesInvoice[]>([]);
   const [balances, setBalances] = useState<Balance[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [expenseAccounts, setExpenseAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -66,13 +71,14 @@ export default function InventoryIssues() {
   const [destination, setDestination] = useState("");
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [expenseAccountCode, setExpenseAccountCode] = useState("");
   const [lines, setLines] = useState<IssueLine[]>([newLine()]);
 
   const load = async () => {
     setLoading(true);
     setError("");
-    const [issueResult, lineResult, productResult, warehouseResult, customerResult, invoiceResult, balanceResult] = await Promise.all([
-      selectAllRows((from, to) => supabase.from("inventory_issues").select("id, issue_number, issue_date, issue_type, warehouse_id, customer_id, sales_invoice_id, destination, reference, notes, status, accounting_status, accounting_journal_entry_id").order("created_at", { ascending: false }).order("id").range(from, to)),
+    const [issueResult, lineResult, productResult, warehouseResult, customerResult, invoiceResult, balanceResult, accountResult] = await Promise.all([
+      selectAllRows((from, to) => supabase.from("inventory_issues").select("id, issue_number, issue_date, issue_type, warehouse_id, customer_id, sales_invoice_id, destination, reference, notes, expense_account_code, status, accounting_status, accounting_journal_entry_id").order("created_at", { ascending: false }).order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("inventory_issue_lines").select("id, issue_id, product_id, quantity, unit_cost").order("created_at").order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("inventory_products").select("id, sku, name_ar, unit").eq("item_type", "product").eq("active", true).order("sku").order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("inventory_warehouses").select("id, code, name_ar").eq("active", true).order("code").order("id").range(from, to)),
@@ -80,7 +86,10 @@ export default function InventoryIssues() {
       // إشعار التسليم لا يُربط إلا بفاتورة مبيعات مرحّلة (يرفض الخادم غير ذلك)
       selectAllRows((from, to) => supabase.from("sales_invoices").select("id, customer_id, customer, accounting_status").eq("accounting_status", "posted").order("created_at", { ascending: false }).order("id").range(from, to)),
       supabase.rpc("list_inventory_balances"),
+      // دليل الحسابات لاختيار حساب المصروف في الصرف الداخلي (حسابات طرفية تبدأ بـ 5)
+      selectAllRows((from, to) => supabase.from("accounting_accounts").select("code, name_ar, parent_code").order("code").range(from, to)),
     ]);
+    // تعذّر قراءة الدليل لا يوقف الشاشة؛ تبقى قائمة حساب المصروف فارغة ويُحمَّل الصرف على تكلفة المبيعات
     const firstError = issueResult.error ?? lineResult.error ?? productResult.error ?? warehouseResult.error ?? customerResult.error ?? invoiceResult.error ?? balanceResult.error;
     if (firstError) {
       setError(inventoryErrorText(firstError.message, t));
@@ -92,6 +101,11 @@ export default function InventoryIssues() {
     setCustomers((customerResult.data ?? []).map((row) => ({ id: String(row.id), number: String(row.customer_number ?? ""), name: String(row.name ?? "") })));
     setInvoices((invoiceResult.data ?? []).map((row) => ({ id: String(row.id), customerId: String(row.customer_id ?? ""), customer: String(row.customer ?? "") })));
     setBalances((balanceResult.data ?? []).map((row) => ({ productId: String(row.product_id), warehouseId: String(row.warehouse_id), quantity: Number(row.quantity) || 0, value: Number(row.inventory_value) || 0 })));
+    const accountRows = accountResult.data ?? [];
+    const parentAccountCodes = new Set(accountRows.map((row) => String(row.parent_code ?? "")).filter(Boolean));
+    const allAccounts = accountRows.map((row) => ({ code: String(row.code), name: String(row.name_ar ?? "") }));
+    setAccounts(allAccounts);
+    setExpenseAccounts(allAccounts.filter((account) => account.code.startsWith("5") && !parentAccountCodes.has(account.code)));
     setIssues((issueResult.data ?? []).map((row) => ({
       id: String(row.id),
       number: String(row.issue_number),
@@ -103,6 +117,7 @@ export default function InventoryIssues() {
       destination: String(row.destination ?? ""),
       reference: String(row.reference ?? ""),
       notes: String(row.notes ?? ""),
+      expenseAccountCode: String(row.expense_account_code ?? ""),
       status: row.status as InventoryIssue["status"],
       accountingStatus: row.accounting_status as InventoryIssue["accountingStatus"],
       journalEntryId: String(row.accounting_journal_entry_id ?? ""),
@@ -123,6 +138,7 @@ export default function InventoryIssues() {
     setDestination("");
     setReference("");
     setNotes("");
+    setExpenseAccountCode("");
     setLines([newLine()]);
     setError("");
   };
@@ -138,6 +154,7 @@ export default function InventoryIssues() {
     setDestination(issue.destination);
     setReference(issue.reference);
     setNotes(issue.notes);
+    setExpenseAccountCode(issue.issueType === "issue" ? issue.expenseAccountCode : "");
     setLines(issue.lines.length ? issue.lines : [newLine()]);
     setError("");
   };
@@ -175,6 +192,8 @@ export default function InventoryIssues() {
         destination: destination.trim(),
         reference: reference.trim(),
         notes: notes.trim(),
+        // حساب المصروف للصرف الداخلي فقط؛ إشعار التسليم يبقى على تكلفة المبيعات ولا يُرسل الحقل
+        ...(issueType === "issue" ? { expenseAccountCode: expenseAccountCode || null } : {}),
         lines: lines.map((line) => ({ productId: line.productId, quantity: numberValue(line.quantity) })),
       },
     });
@@ -186,7 +205,8 @@ export default function InventoryIssues() {
   };
 
   const post = async (issue: InventoryIssue) => {
-    if (!confirm(t("هل تريد ترحيل السند؟ سيتم خصم المخزون وإنشاء قيد تكلفة المبيعات ولن يمكن تعديل السند بعد ذلك."))) return;
+    const chargedToExpense = issue.issueType === "issue" && Boolean(issue.expenseAccountCode);
+    if (!confirm(t(chargedToExpense ? "هل تريد ترحيل السند؟ سيتم خصم المخزون وإنشاء قيد على حساب المصروف المختار ولن يمكن تعديل السند بعد ذلك." : "هل تريد ترحيل السند؟ سيتم خصم المخزون وإنشاء قيد تكلفة المبيعات ولن يمكن تعديل السند بعد ذلك."))) return;
     setBusy(true);
     const { error: postError } = await supabase.rpc("post_inventory_issue", { p_id: issue.id });
     setBusy(false);
@@ -194,7 +214,7 @@ export default function InventoryIssues() {
       toast({ title: t("تعذر ترحيل سند الصرف"), description: inventoryErrorText(postError.message, t), variant: "destructive" });
       return;
     }
-    toast({ title: t("تم ترحيل الصرف وقيد تكلفة المبيعات") });
+    toast({ title: t(chargedToExpense ? "تم ترحيل الصرف وقيد حساب المصروف" : "تم ترحيل الصرف وقيد تكلفة المبيعات") });
     await load();
   };
 
@@ -213,9 +233,18 @@ export default function InventoryIssues() {
 
   const warehouseName = (id: string) => warehouses.find((warehouse) => warehouse.id === id)?.name ?? "—";
   const customerName = (id: string) => customers.find((customer) => customer.id === id)?.name ?? "—";
+  const accountLabel = (code: string) => {
+    const account = accounts.find((item) => item.code === code);
+    return account ? `${account.code} — ${account.name}` : code;
+  };
+  // الحساب المدين عند الترحيل: حساب المصروف المختار للصرف الداخلي، وإلا تكلفة المبيعات للصنف
+  const chargeAccountText = (issue: Pick<InventoryIssue, "issueType" | "expenseAccountCode">) =>
+    issue.issueType === "issue" && issue.expenseAccountCode ? accountLabel(issue.expenseAccountCode) : t("تكلفة المبيعات للصنف");
 
-  // طباعة إشعار التسليم (A4) بالكميات فقط دون أسعار أو تكاليف
-  const printDeliveryNote = async (issue: InventoryIssue) => {
+  // طباعة إشعار التسليم (A4) بالكميات فقط دون أسعار أو تكاليف،
+  // وطباعة سند الصرف الداخلي بالكميات والتكلفة وحساب المصروف المحمَّل عليه
+  const printIssue = async (issue: InventoryIssue) => {
+    const isDelivery = issue.issueType === "delivery";
     const printWindow = window.open("", "_blank");
     if (!printWindow) {
       toast({ title: t("تعذر فتح نافذة الطباعة. اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة."), variant: "destructive" });
@@ -230,22 +259,30 @@ export default function InventoryIssues() {
     }
     const warehouse = warehouses.find((item) => item.id === issue.warehouseId);
     const customer = customers.find((item) => item.id === issue.customerId);
+    const moneyText = (value: number) => formatNumber(Math.abs(value) < 0.005 ? 0 : value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const rowsHtml = issue.lines.map((line, index) => {
       const product = productById.get(line.productId);
-      return `<tr><td class="num">${index + 1}</td><td class="mono">${escapeHtml(product?.sku ?? "—")}</td><td>${escapeHtml(product?.name ?? line.productId)}</td><td>${escapeHtml(product?.unit ?? "—")}</td><td class="num">${escapeHtml(formatNumber(numberValue(line.quantity), { maximumFractionDigits: 4 }))}</td></tr>`;
+      const costCells = isDelivery ? "" : `<td class="num">${escapeHtml(moneyText(numberValue(line.unitCost)))}</td><td class="num">${escapeHtml(moneyText(numberValue(line.quantity) * numberValue(line.unitCost)))}</td>`;
+      return `<tr><td class="num">${index + 1}</td><td class="mono">${escapeHtml(product?.sku ?? "—")}</td><td>${escapeHtml(product?.name ?? "—")}</td><td>${escapeHtml(product?.unit ?? "—")}</td><td class="num">${escapeHtml(formatNumber(numberValue(line.quantity), { maximumFractionDigits: 4 }))}</td>${costCells}</tr>`;
     }).join("");
+    const totalCost = issue.lines.reduce((sum, line) => sum + numberValue(line.quantity) * numberValue(line.unitCost), 0);
+    const documentTitle = t(isDelivery ? "إشعار تسليم" : "سند صرف داخلي");
     const field = (label: string, value: string) => `<div class="field"><span>${escapeHtml(t(label))}</span><strong>${escapeHtml(value || "—")}</strong></div>`;
     printWindow.document.write(`<!doctype html>
-<html dir="${direction}" lang="${locale}"><head><meta charset="utf-8"><title>${escapeHtml(t("إشعار تسليم"))} ${escapeHtml(issue.number)}</title>
+<html dir="${direction}" lang="${locale}"><head><meta charset="utf-8"><title>${escapeHtml(documentTitle)} ${escapeHtml(issue.number)}</title>
 <style>
-@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;color:#0f172a;font-family:"Tajawal","Tahoma",Arial,sans-serif;font-size:12px}.page{max-width:186mm;margin:0 auto}.head{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:3px solid #b45309;padding-bottom:10px}.head img{max-height:64px;max-width:120px;object-fit:contain}.company h2{margin:0 0 2px;font-size:16px}.company p{margin:1px 0;color:#475569;font-size:11px}.title{margin:14px 0 10px;text-align:center;font-size:20px;font-weight:800;color:#b45309}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:12px}.field{display:flex;justify-content:space-between;gap:8px;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px}.field span{color:#64748b}.wide{grid-column:1 / -1}table{width:100%;border-collapse:collapse;margin-top:6px}th,td{border:1px solid #cbd5e1;padding:7px 8px;text-align:start}th{background:#f1f5f9;font-weight:700}.num{text-align:center;width:1%;white-space:nowrap}.mono{font-family:monospace;white-space:nowrap}.sign{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:28px}.box{border:1px solid #94a3b8;border-radius:6px;min-height:70px;padding:8px}.box span{display:block;color:#64748b;margin-bottom:34px}.note{margin-top:14px;color:#64748b;font-size:10px;text-align:center}
+@page{size:A4 portrait;margin:12mm}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;color:#0f172a;font-family:"Tajawal","Tahoma",Arial,sans-serif;font-size:12px}.page{max-width:186mm;margin:0 auto}.head{display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:3px solid #b45309;padding-bottom:10px}.head img{max-height:64px;max-width:120px;object-fit:contain}.company h2{margin:0 0 2px;font-size:16px}.company p{margin:1px 0;color:#475569;font-size:11px}.title{margin:14px 0 10px;text-align:center;font-size:20px;font-weight:800;color:#b45309}.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;margin-bottom:12px}.field{display:flex;justify-content:space-between;gap:8px;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px}.field span{color:#64748b}.wide{grid-column:1 / -1}table{width:100%;border-collapse:collapse;margin-top:6px}th,td{border:1px solid #cbd5e1;padding:7px 8px;text-align:start}th{background:#f1f5f9;font-weight:700}.num{text-align:center;width:1%;white-space:nowrap}.mono{font-family:monospace;white-space:nowrap}.sign{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:28px}.box{border:1px solid #94a3b8;border-radius:6px;min-height:70px;padding:8px}.box span{display:block;color:#64748b;margin-bottom:34px}.note{margin-top:14px;color:#64748b;font-size:10px;text-align:center}tfoot td{font-weight:700;background:#f8fafc}
 </style></head><body><main class="page">
 <header class="head"><div class="company"><h2>${escapeHtml(COMPANY_PROFILE.companyNameAr)}</h2><p>${escapeHtml(COMPANY_PROFILE.companyNameEn)}</p><p>${escapeHtml(t("الرقم الضريبي"))}: ${escapeHtml(COMPANY_PROFILE.vatNumber)}</p><p>${escapeHtml(COMPANY_PROFILE.addressAr)}</p></div><img src="${escapeHtml(COMPANY_PROFILE.logoUrl)}" alt="" /></header>
-<div class="title">${escapeHtml(t("إشعار تسليم"))}</div>
-<section class="grid">${field("رقم الإشعار", issue.number)}${field("التاريخ", issue.date)}${field("العميل", customer ? `${customer.number} — ${customer.name}` : "")}${field("فاتورة المبيعات", issue.salesInvoiceId)}${field("المستودع", warehouse ? `${warehouse.code} — ${warehouse.name}` : "")}${field("جهة التسليم أو المشروع", issue.destination)}${field("المرجع", issue.reference)}<div class="wide">${field("ملاحظات", issue.notes)}</div></section>
-<table><thead><tr><th class="num">#</th><th>${escapeHtml(t("رمز الصنف"))}</th><th>${escapeHtml(t("الصنف"))}</th><th>${escapeHtml(t("الوحدة"))}</th><th class="num">${escapeHtml(t("الكمية"))}</th></tr></thead><tbody>${rowsHtml}</tbody></table>
-<section class="sign"><div class="box"><span>${escapeHtml(t("اسم المستلم"))}</span></div><div class="box"><span>${escapeHtml(t("توقيع المستلم"))}</span></div><div class="box"><span>${escapeHtml(t("تاريخ الاستلام"))}</span></div></section>
-<p class="note">${escapeHtml(t("استلمت البضاعة المذكورة أعلاه بحالة سليمة وبالكميات الموضحة."))}</p>
+<div class="title">${escapeHtml(documentTitle)}</div>
+${isDelivery
+  ? `<section class="grid">${field("رقم الإشعار", issue.number)}${field("التاريخ", issue.date)}${field("العميل", customer ? `${customer.number} — ${customer.name}` : "")}${field("فاتورة المبيعات", issue.salesInvoiceId)}${field("المستودع", warehouse ? `${warehouse.code} — ${warehouse.name}` : "")}${field("جهة التسليم أو المشروع", issue.destination)}${field("المرجع", issue.reference)}<div class="wide">${field("ملاحظات", issue.notes)}</div></section>`
+  : `<section class="grid">${field("رقم السند", issue.number)}${field("التاريخ", issue.date)}${field("المستودع", warehouse ? `${warehouse.code} — ${warehouse.name}` : "")}${field("حساب المصروف", chargeAccountText(issue))}${field("جهة التسليم أو المشروع", issue.destination)}${field("المرجع", issue.reference)}${customer ? field("العميل", `${customer.number} — ${customer.name}`) : ""}<div class="wide">${field("ملاحظات", issue.notes)}</div></section>`}
+<table><thead><tr><th class="num">#</th><th>${escapeHtml(t("رمز الصنف"))}</th><th>${escapeHtml(t("الصنف"))}</th><th>${escapeHtml(t("الوحدة"))}</th><th class="num">${escapeHtml(t("الكمية"))}</th>${isDelivery ? "" : `<th class="num">${escapeHtml(t("متوسط التكلفة"))}</th><th class="num">${escapeHtml(t("التكلفة"))}</th>`}</tr></thead><tbody>${rowsHtml}</tbody>${isDelivery ? "" : `<tfoot><tr><td colspan="6">${escapeHtml(t("إجمالي التكلفة"))} (SAR)</td><td class="num">${escapeHtml(moneyText(totalCost))}</td></tr></tfoot>`}</table>
+${isDelivery
+  ? `<section class="sign"><div class="box"><span>${escapeHtml(t("اسم المستلم"))}</span></div><div class="box"><span>${escapeHtml(t("توقيع المستلم"))}</span></div><div class="box"><span>${escapeHtml(t("تاريخ الاستلام"))}</span></div></section>
+<p class="note">${escapeHtml(t("استلمت البضاعة المذكورة أعلاه بحالة سليمة وبالكميات الموضحة."))}</p>`
+  : `<section class="sign"><div class="box"><span>${escapeHtml(t("المستلم"))}</span></div><div class="box"><span>${escapeHtml(t("أمين المستودع"))}</span></div><div class="box"><span>${escapeHtml(t("المعتمد"))}</span></div></section>`}
 </main><script>window.onload=()=>setTimeout(()=>window.print(),250)</script></body></html>`);
     printWindow.document.close();
     printWindow.focus();
@@ -259,7 +296,7 @@ export default function InventoryIssues() {
             <div className="rounded-lg bg-amber-50 p-2 text-amber-700"><PackageMinus className="h-6 w-6" /></div>
             <div>
               <h1 className="text-2xl font-bold text-slate-900">{t(isDeliveryPath ? "إشعارات التسليم" : "سندات الصرف وإشعارات التسليم")}</h1>
-              <p className="mt-1 text-sm text-slate-500">{t(isDeliveryPath ? "تسليم البضاعة للعميل مقابل فاتورة مبيعات مرحّلة، مع خصم المخزون بالمتوسط المرجح وإنشاء قيد تكلفة المبيعات تلقائياً." : "صرف المخزون بالمتوسط المرجح مع إنشاء قيد تكلفة المبيعات تلقائياً.")}</p>
+              <p className="mt-1 text-sm text-slate-500">{t(isDeliveryPath ? "تسليم البضاعة للعميل مقابل فاتورة مبيعات مرحّلة، مع خصم المخزون بالمتوسط المرجح وإنشاء قيد تكلفة المبيعات تلقائياً." : "صرف المخزون بالمتوسط المرجح مع إنشاء القيد تلقائياً: الصرف الداخلي على حساب المصروف المختار، وإشعار التسليم على تكلفة المبيعات.")}</p>
             </div>
           </div>
           <button onClick={startNew} className="inline-flex items-center gap-2 rounded bg-amber-600 px-4 py-2 text-sm font-semibold text-white"><Plus className="h-4 w-4" />{t(isDeliveryPath ? "إشعار تسليم جديد" : "سند صرف جديد")}</button>
@@ -274,9 +311,10 @@ export default function InventoryIssues() {
               <button onClick={reset}><X className="h-5 w-5" /></button>
             </div>
             <div className="grid gap-3 md:grid-cols-3">
-              <label className="text-xs text-slate-600">{t("نوع المستند")}<select value={issueType} disabled={isDeliveryPath} onChange={(event) => { const next = event.target.value as "issue" | "delivery"; setIssueType(next); if (next === "delivery" && !customerId) setSalesInvoiceId(""); }} className="mt-1 h-10 w-full rounded border px-2 disabled:bg-slate-50"><option value="issue">{t("سند صرف داخلي")}</option><option value="delivery">{t("إشعار تسليم لعميل")}</option></select></label>
+              <label className="text-xs text-slate-600">{t("نوع المستند")}<select value={issueType} disabled={isDeliveryPath} onChange={(event) => { const next = event.target.value as "issue" | "delivery"; setIssueType(next); if (next === "delivery") { setExpenseAccountCode(""); if (!customerId) setSalesInvoiceId(""); } }} className="mt-1 h-10 w-full rounded border px-2 disabled:bg-slate-50"><option value="issue">{t("سند صرف داخلي")}</option><option value="delivery">{t("إشعار تسليم لعميل")}</option></select></label>
               <label className="text-xs text-slate-600">{t("تاريخ الصرف")}<input type="date" max={today()} value={date} onChange={(event) => setDate(event.target.value)} className="mt-1 h-10 w-full rounded border px-3" /></label>
               <label className="text-xs text-slate-600">{t("المستودع")}<select value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)} className="mt-1 h-10 w-full rounded border px-2"><option value="">{t("اختر المستودع")}</option>{warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.code} — {warehouse.name}</option>)}</select></label>
+              {issueType === "issue" && <label className="text-xs text-slate-600">{t("حساب المصروف — اختياري")}<select value={expenseAccountCode} onChange={(event) => setExpenseAccountCode(event.target.value)} className="mt-1 h-10 w-full rounded border px-2"><option value="">{t("اختر حساب المصروف")}</option>{expenseAccountCode && !expenseAccounts.some((account) => account.code === expenseAccountCode) && <option value={expenseAccountCode}>{accountLabel(expenseAccountCode)} — {t("حساب غير متاح للترحيل")}</option>}{expenseAccounts.map((account) => <option key={account.code} value={account.code}>{account.code} — {account.name}</option>)}</select><span className="mt-1 block text-[11px] text-slate-400">{t("إن تُرك فارغًا يُحمَّل على تكلفة المبيعات للصنف")}</span></label>}
               <label className="text-xs text-slate-600">{t(issueType === "delivery" ? "العميل" : "العميل — اختياري")}<select value={customerId} onChange={(event) => { setCustomerId(event.target.value); setSalesInvoiceId(""); }} className="mt-1 h-10 w-full rounded border px-2"><option value="">{t("بدون عميل")}</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.number} — {customer.name}</option>)}</select></label>
               <label className="text-xs text-slate-600">{t("فاتورة المبيعات — اختياري")}<select value={salesInvoiceId} onChange={(event) => setSalesInvoiceId(event.target.value)} className="mt-1 h-10 w-full rounded border px-2"><option value="">{t("بدون ربط بفاتورة")}</option>{salesInvoiceId && !filteredInvoices.some((invoice) => invoice.id === salesInvoiceId) && <option value={salesInvoiceId}>{salesInvoiceId} — {t("فاتورة غير مرحّلة أو لعميل آخر")}</option>}{filteredInvoices.map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.id} — {invoiceCustomerName(invoice)}</option>)}</select></label>
               <label className="text-xs text-slate-600">{t("جهة التسليم أو المشروع")}<input value={destination} onChange={(event) => setDestination(event.target.value)} className="mt-1 h-10 w-full rounded border px-3" /></label>
@@ -310,10 +348,10 @@ export default function InventoryIssues() {
 
         <section className="overflow-hidden rounded-xl border bg-white shadow-sm">
           <div className="overflow-x-auto"><table className="min-w-full text-sm">
-            <thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">{t(isDeliveryPath ? "رقم الإشعار" : "رقم السند")}</th><th className="p-3">{t("النوع")}</th><th className="p-3">{t("التاريخ")}</th><th className="p-3">{t("المستودع")}</th><th className="p-3">{t("العميل")}</th><th className="p-3">{t("التكلفة")}</th><th className="p-3">{t("الحالة")}</th><th className="p-3">{t("الإجراءات")}</th></tr></thead>
-            <tbody>{loading ? <tr><td colSpan={8} className="py-14 text-center">{t("جاري التحميل...")}</td></tr> : visibleIssues.length === 0 ? <tr><td colSpan={8} className="py-14 text-center text-slate-400">{t(isDeliveryPath ? "لا توجد إشعارات تسليم" : "لا توجد سندات صرف")}</td></tr> : visibleIssues.map((issue) => <tr key={issue.id} className="border-t">
-              <td className="p-3 font-mono">{issue.number}</td><td className="p-3 text-center">{t(issue.issueType === "delivery" ? "إشعار تسليم" : "صرف داخلي")}</td><td className="p-3 text-center">{issue.date}</td><td className="p-3 text-center">{warehouseName(issue.warehouseId)}</td><td className="p-3 text-center">{customerName(issue.customerId)}</td><td className="p-3 text-center font-semibold">{formatNumber(issue.lines.reduce((sum, line) => sum + numberValue(line.quantity) * numberValue(line.unitCost), 0), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td className="p-3 text-center"><span className={`rounded px-2 py-1 text-xs font-semibold ${issue.status === "posted" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{t(issue.status === "posted" ? "مرحّل" : "مسودة")}</span></td>
-              <td className="p-3"><div className="flex justify-center gap-1">{issue.status === "draft" && <><button disabled={busy} onClick={() => startEdit(issue)} className="rounded border p-2 text-sky-700" title={t("تعديل")}><Edit3 className="h-4 w-4" /></button><button disabled={busy} onClick={() => void post(issue)} className="rounded border p-2 text-emerald-700" title={t("ترحيل")}><Send className="h-4 w-4" /></button><button disabled={busy} onClick={() => void remove(issue)} className="rounded border p-2 text-red-600" title={t("حذف")}><Trash2 className="h-4 w-4" /></button></>}{issue.status === "posted" && issue.issueType === "delivery" && <button onClick={() => void printDeliveryNote(issue)} className="rounded border p-2 text-slate-700" title={t("طباعة")}><Printer className="h-4 w-4" /></button>}</div></td>
+            <thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">{t(isDeliveryPath ? "رقم الإشعار" : "رقم السند")}</th><th className="p-3">{t("النوع")}</th><th className="p-3">{t("التاريخ")}</th><th className="p-3">{t("المستودع")}</th><th className="p-3">{t("العميل")}</th><th className="p-3">{t("حساب التحميل")}</th><th className="p-3">{t("التكلفة")}</th><th className="p-3">{t("الحالة")}</th><th className="p-3">{t("الإجراءات")}</th></tr></thead>
+            <tbody>{loading ? <tr><td colSpan={9} className="py-14 text-center">{t("جاري التحميل...")}</td></tr> : visibleIssues.length === 0 ? <tr><td colSpan={9} className="py-14 text-center text-slate-400">{t(isDeliveryPath ? "لا توجد إشعارات تسليم" : "لا توجد سندات صرف")}</td></tr> : visibleIssues.map((issue) => <tr key={issue.id} className="border-t">
+              <td className="p-3 font-mono">{issue.number}</td><td className="p-3 text-center">{t(issue.issueType === "delivery" ? "إشعار تسليم" : "صرف داخلي")}</td><td className="p-3 text-center">{issue.date}</td><td className="p-3 text-center">{warehouseName(issue.warehouseId)}</td><td className="p-3 text-center">{customerName(issue.customerId)}</td><td className={`p-3 text-center text-xs ${issue.issueType === "issue" && issue.expenseAccountCode ? "text-slate-700" : "text-slate-400"}`}>{chargeAccountText(issue)}</td><td className="p-3 text-center font-semibold">{formatNumber(issue.lines.reduce((sum, line) => sum + numberValue(line.quantity) * numberValue(line.unitCost), 0), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td className="p-3 text-center"><span className={`rounded px-2 py-1 text-xs font-semibold ${issue.status === "posted" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{t(issue.status === "posted" ? "مرحّل" : "مسودة")}</span></td>
+              <td className="p-3"><div className="flex justify-center gap-1">{issue.status === "draft" && <><button disabled={busy} onClick={() => startEdit(issue)} className="rounded border p-2 text-sky-700" title={t("تعديل")}><Edit3 className="h-4 w-4" /></button><button disabled={busy} onClick={() => void post(issue)} className="rounded border p-2 text-emerald-700" title={t("ترحيل")}><Send className="h-4 w-4" /></button><button disabled={busy} onClick={() => void remove(issue)} className="rounded border p-2 text-red-600" title={t("حذف")}><Trash2 className="h-4 w-4" /></button></>}{issue.status === "posted" && <button onClick={() => void printIssue(issue)} className="rounded border p-2 text-slate-700" title={t("طباعة")}><Printer className="h-4 w-4" /></button>}</div></td>
             </tr>)}</tbody>
           </table></div>
         </section>

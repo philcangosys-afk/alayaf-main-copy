@@ -3,7 +3,7 @@ import Layout from "@/components/Layout";
 import CrmReports from "@/components/crm/CrmReports";
 import { Plus, Search, RotateCcw, Eye, Pencil, Trash2, Save, X } from "lucide-react";
 import { useLocation } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { selectAllRows } from "@/lib/ledgerData";
 import { normalizePartyName, partyErrorText } from "@/lib/partyErrors";
@@ -38,7 +38,6 @@ type PartyRow = {
   licenseNumber: string;
   createdAt: string;
   createdBy: string;
-  creatorName: string;
 };
 
 type PartyForm = {
@@ -106,7 +105,6 @@ const mapPartyRow = (row: Record<string, unknown>): PartyRow => ({
   licenseNumber: String(row.license_number ?? ""),
   createdAt: String(row.created_at ?? ""),
   createdBy: String(row.created_by ?? ""),
-  creatorName: "—",
 });
 
 
@@ -186,6 +184,7 @@ const crmTranslations: Record<string, string> = {
   "التسجيل في ضريبة القيمة المضافة *": "VAT registration *",
   "رقم التسجيل الضريبي": "Tax registration number",
   "رقم السجل التجاري للعميل": "Customer commercial registration",
+  "رقم السجل التجاري للمورد": "Vendor commercial registration",
   "العنوان اختياري": "Address (optional)",
   "المدينة": "City",
   "الشارع": "Street",
@@ -366,16 +365,7 @@ export default function CRM() {
         );
 
         if (!error && data) {
-          const mapped = data.map((row) => mapPartyRow(row as Record<string, unknown>));
-          if (canViewCreator) {
-            const ids = Array.from(new Set(mapped.map((item) => item.createdBy).filter(Boolean)));
-            if (ids.length > 0) {
-              const { data: labels } = await supabase.rpc("business_user_labels", { p_user_ids: ids });
-              const names = new Map<string, string>((labels ?? []).map((item) => [String(item.user_id), String(item.display_name)] as [string, string]));
-              mapped.forEach((item) => { item.creatorName = names.get(item.createdBy) ?? "—"; });
-            }
-          }
-          setter(mapped);
+          setter(data.map((row) => mapPartyRow(row as Record<string, unknown>)));
         } else {
           setter([]);
         }
@@ -388,7 +378,34 @@ export default function CRM() {
       loadTable("customers", setCustomerRows),
       loadTable("vendors", setVendorRows),
     ]);
-  }, [canViewCreator]);
+  }, []);
+
+  // أسماء المنشئين تُجلب منفصلة عن تحميل الصفوف (وللصفوف المضافة لاحقًا)، حتى لا يطغى تحميل سابق بلا أسماء على اللاحق
+  const [creatorLabels, setCreatorLabels] = useState<Record<string, string>>({});
+  const requestedCreatorIds = useRef(new Set<string>());
+  useEffect(() => {
+    if (!canViewCreator) return;
+    const ids = Array.from(new Set([...customerRows, ...vendorRows].map((row) => row.createdBy)))
+      .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) && !requestedCreatorIds.current.has(id));
+    if (ids.length === 0) return;
+    ids.forEach((id) => requestedCreatorIds.current.add(id));
+    void (async () => {
+      const { data: labels, error } = await supabase.rpc("business_user_labels", { p_user_ids: ids });
+      if (error) {
+        console.warn("business_user_labels:", error.message);
+        ids.forEach((id) => requestedCreatorIds.current.delete(id));
+        return;
+      }
+      setCreatorLabels((previous) => {
+        const next = { ...previous };
+        (labels ?? []).forEach((item: { user_id?: unknown; display_name?: unknown }) => {
+          const name = String(item.display_name ?? "").trim();
+          if (item.user_id && name) next[String(item.user_id)] = name;
+        });
+        return next;
+      });
+    })();
+  }, [canViewCreator, customerRows, vendorRows]);
 
   useEffect(() => {
     // عند التنقل بين العملاء والموردين والتقارير يُغلق النموذج وتُصفّر الفلاتر
@@ -437,11 +454,14 @@ export default function CRM() {
   const searchPlaceholder = t(
     isVendors ? "ابحث بالاسم أو رقم المورد" : "ابحث بالاسم أو رقم العميل"
   );
-  const formatAmount = (value: string) =>
-    `${formatNumber(Number.parseFloat(value) || 0, {
+  // المبلغ بعملة الطرف (الريال افتراضيًا)
+  const formatAmount = (value: string, currency?: string) => {
+    const code = String(currency ?? "").trim().toUpperCase();
+    return `${formatNumber(Number.parseFloat(value) || 0, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
-    })} ${t("ريال")}`;
+    })} ${!code || code === "SAR" ? t("ريال") : code}`;
+  };
 
   const typeOptions = isVendors
     ? ["مورد محلي", "مورد دولي", "مورد خدمات"]
@@ -612,10 +632,7 @@ export default function CRM() {
 
       if (!result.error) {
         // الصف كما حفظته القاعدة (يحافظ على الرقم وتاريخ الإنشاء واسم المنشئ)
-        const updatedRow = {
-          ...mapPartyRow(result.data[0] as Record<string, unknown>),
-          creatorName: original?.creatorName ?? "—",
-        };
+        const updatedRow = mapPartyRow(result.data[0] as Record<string, unknown>);
         if (isVendors) {
           setVendorRows((prev) =>
             prev.map((row) => (row.id === form.id ? updatedRow : row))
@@ -995,7 +1012,7 @@ export default function CRM() {
                   placeholder={t("اختياري")}
                 />
                 <label className="text-sm font-medium text-slate-700 text-end">
-                  {t("رقم السجل التجاري للعميل")}
+                  {t(isVendors ? "رقم السجل التجاري للمورد" : "رقم السجل التجاري للعميل")}
                 </label>
               </div>
 
@@ -1205,14 +1222,14 @@ export default function CRM() {
                         {customer.taxNumber || "—"}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
-                        {formatAmount(customer.creditLimit)}
+                        {formatAmount(customer.creditLimit, customer.currency)}
                       </td>
                       <td className="px-4 py-3">
                         <span className={`rounded-full px-3 py-1 text-xs font-semibold ${customer.status === "نشط" ? "bg-success/10 text-success" : "bg-slate-100 text-slate-500"}`}>
                           {t(customer.status)}
                         </span>
                       </td>
-                      {canViewCreator && <td className="px-4 py-3 whitespace-nowrap">{customer.creatorName || "—"}</td>}
+                      {canViewCreator && <td className="px-4 py-3 whitespace-nowrap">{(customer.createdBy && creatorLabels[customer.createdBy]) || "—"}</td>}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
                           <button
@@ -1301,7 +1318,7 @@ export default function CRM() {
 
                 <div>
                   <p className="text-xs text-muted-foreground">{t("حد الائتمان (للعلم فقط)")}</p>
-                  <p className="text-sm font-medium text-foreground">{formatAmount(viewModal.creditLimit)}</p>
+                  <p className="text-sm font-medium text-foreground">{formatAmount(viewModal.creditLimit, viewModal.currency)}</p>
                 </div>
 
                 <div>

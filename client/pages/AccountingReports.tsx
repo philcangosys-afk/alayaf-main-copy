@@ -29,7 +29,8 @@ const REPORT_LINKS: { title: string; items: { label: string; path: string }[] }[
 ];
 
 const EPSILON = 0.005;
-const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+// التقريب إلى هللتين، مع منع "-0.00" لفروق التقريب الصغيرة (Math.round قد يعيد -0).
+const round2 = (value: number) => { const rounded = Math.round((value + Number.EPSILON) * 100) / 100; return Math.abs(rounded) < 0.005 ? 0 : rounded; };
 const isZero = (value: number) => Math.abs(value) < EPSILON;
 
 /** أشهر السنة المالية من يناير حتى شهر تاريخ النهاية. */

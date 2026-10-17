@@ -33,6 +33,8 @@ import { nextCompanyNumber } from "@/lib/companyNumbers";
 import { readUserSession } from "@/lib/authSession";
 import { useI18n } from "@/i18n";
 import { toast } from "sonner";
+import { riyadhDateString } from "@/lib/utils";
+import { dbErrorText } from "@/lib/dbErrors";
 
 type View =
   | "dashboard"
@@ -181,7 +183,22 @@ const navGroups: Array<{
   },
 ];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => riyadhDateString();
+/** المهمة المنتهية (مكتملة أو ملغاة) لا تُعرض لها إجراءات بدء أو موافقة */
+const CLOSED_TASK_STATUSES = ["مكتملة", "ملغاة", "ملغية", "ملغى"];
+const isClosedTask = (status: string) => CLOSED_TASK_STATUSES.includes(String(status ?? "").trim());
+/** خطأ القاعدة بنص عربي: الرسائل العربية كما هي، والمعروفة تُترجم، وغيرها رسالة عامة */
+const workErrorText = (
+  message: string,
+  fallback = "تعذر تنفيذ العملية؛ حاول مرة أخرى أو راجع مدير النظام.",
+) => {
+  const text = String(message ?? "");
+  if (/[\u0600-\u06FF]/.test(text)) return text;
+  const known = dbErrorText(text);
+  if (known) return known;
+  console.warn("work module error:", text);
+  return fallback;
+};
 const inputClass =
   "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-cyan-500 focus:ring-2 focus:ring-cyan-100";
 const statusTone: Record<string, string> = {
@@ -207,7 +224,7 @@ export default function TasksProjects() {
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("الكل");
-  const [fromDate, setFromDate] = useState(`${new Date().getFullYear()}-01-01`);
+  const [fromDate, setFromDate] = useState(`${riyadhDateString().slice(0, 4)}-01-01`);
   const [toDate, setToDate] = useState(today());
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -488,7 +505,7 @@ export default function TasksProjects() {
       .select("id")
       .single();
     setSaving(false);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     if (createdProject)
       await supabase
         .from("work_activity_log")
@@ -588,7 +605,7 @@ export default function TasksProjects() {
         toast.error(t("تم إنشاء المهمة لكن تعذر حفظ بعض المتعاونين"));
     }
     setSaving(false);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setModal(null);
     setTaskForm({
       title: "",
@@ -628,7 +645,7 @@ export default function TasksProjects() {
       supportId = await nextCompanyNumber("SUP", 6);
     } catch (numberError) {
       setSaving(false);
-      return toast.error((numberError as Error)?.message || "تعذر حجز رقم الدعم");
+      return toast.error(t(workErrorText((numberError as Error)?.message ?? "", "تعذر حجز رقم الدعم")));
     }
     const { error } = await supabase
       .from("support_clients")
@@ -643,7 +660,7 @@ export default function TasksProjects() {
         support_employee_name: employee?.name || "",
       });
     setSaving(false);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setModal(null);
     setClientForm({
       name: "",
@@ -685,7 +702,7 @@ export default function TasksProjects() {
         created_by: (await supabase.auth.getUser()).data.user?.id,
       });
     setSaving(false);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setModal(null);
     setTicketForm({
       subject: "",
@@ -705,7 +722,7 @@ export default function TasksProjects() {
       .from("work_tasks")
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq("id", task.id);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     await supabase
       .from("work_activity_log")
       .insert({
@@ -731,7 +748,7 @@ export default function TasksProjects() {
       .from("work_tasks")
       .delete()
       .eq("id", task.id);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setTasks((current) => current.filter((item) => item.id !== task.id));
   };
 
@@ -814,7 +831,7 @@ export default function TasksProjects() {
         author_name: session?.name || "مستخدم",
         created_by: userId,
       });
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     await supabase
       .from("work_activity_log")
       .insert({
@@ -871,7 +888,7 @@ export default function TasksProjects() {
         sender_name: session?.name || "مستخدم",
         created_by: (await supabase.auth.getUser()).data.user?.id,
       });
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setReply("");
     await openTicket(selectedTicket);
     toast.success(t("تم إرسال الرد"));
@@ -883,7 +900,7 @@ export default function TasksProjects() {
       .from("support_tickets")
       .update({ rating, updated_at: new Date().toISOString() })
       .eq("id", selectedTicket.id);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setSelectedTicket({ ...selectedTicket, rating });
     setTickets((current) =>
       current.map((ticket) =>
@@ -903,7 +920,7 @@ export default function TasksProjects() {
         updated_at: new Date().toISOString(),
       })
       .eq("id", selectedTicket.id);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setModal(null);
     setSelectedTicket(null);
     await load();
@@ -925,7 +942,7 @@ export default function TasksProjects() {
           }
         : { title: newSettingTitle.trim() };
     const { error } = await supabase.from(table).insert(payload);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(workErrorText(error.message)));
     setNewSettingTitle("");
     await load();
     toast.success(t("تمت الإضافة"));
@@ -1129,6 +1146,7 @@ export default function TasksProjects() {
           {view === "tickets" && (
             <TicketsView
               tickets={tickets}
+              projectById={projectById}
               search={search}
               setSearch={setSearch}
               openTicket={openTicket}
@@ -1739,14 +1757,17 @@ export default function TasksProjects() {
                   {Number(selectedTask.estimated_hours || 0).toFixed(2)}
                 </p>
               </div>
-              <button
-                onClick={() =>
-                  updateTask(selectedTask, { status: "قيد التنفيذ" })
-                }
-                className="w-full rounded-xl bg-cyan-600 py-2 text-sm font-bold text-white"
-              >
-                {t("بدء تنفيذ المهمة")}
-              </button>
+              {!isClosedTask(selectedTask.status) &&
+                selectedTask.status !== "قيد التنفيذ" && (
+                  <button
+                    onClick={() =>
+                      updateTask(selectedTask, { status: "قيد التنفيذ" })
+                    }
+                    className="w-full rounded-xl bg-cyan-600 py-2 text-sm font-bold text-white"
+                  >
+                    {t("بدء تنفيذ المهمة")}
+                  </button>
+                )}
               <button
                 onClick={() => {
                   deleteTask(selectedTask);
@@ -1771,6 +1792,7 @@ export default function TasksProjects() {
                   max="100"
                   step="5"
                   value={selectedTask.progress || 0}
+                  disabled={isClosedTask(selectedTask.status)}
                   onChange={(e) => {
                     const progress = Number(e.target.value);
                     setSelectedTask({ ...selectedTask, progress });
@@ -1912,12 +1934,14 @@ export default function TasksProjects() {
               >
                 {t("إرسال الرد")}
               </button>
-              <button
-                onClick={closeTicket}
-                className="rounded-xl border border-rose-200 px-5 text-rose-700"
-              >
-                {t("إغلاق التذكرة")}
-              </button>
+              {selectedTicket.status !== "مغلقة" && (
+                <button
+                  onClick={closeTicket}
+                  className="rounded-xl border border-rose-200 px-5 text-rose-700"
+                >
+                  {t("إغلاق التذكرة")}
+                </button>
+              )}
             </div>
           </div>
         </Modal>
@@ -2270,7 +2294,7 @@ function TasksView({
                   </td>
                   <td className="p-3">
                     <div className="flex gap-1">
-                      {approvals && (
+                      {approvals && !isClosedTask(task.status) && (
                         <>
                           <button
                             onClick={() =>
@@ -2441,7 +2465,7 @@ function ReportsView({
   );
 }
 
-function TicketsView({ tickets, search, setSearch, openTicket }: any) {
+function TicketsView({ tickets, projectById, search, setSearch, openTicket }: any) {
   const { t } = useI18n();
   const filtered = tickets.filter(
     (ticket: SupportTicket) =>
@@ -2523,7 +2547,11 @@ function TicketsView({ tickets, search, setSearch, openTicket }: any) {
                   <td className="p-3 font-medium">{ticket.subject}</td>
                   <td className="p-3">{ticket.client_name}</td>
                   <td className="p-3">{ticket.assigned_emp_name || "-"}</td>
-                  <td className="p-3">{ticket.project_id || "-"}</td>
+                  <td className="p-3">
+                    {ticket.project_id
+                      ? projectById?.get(ticket.project_id) || "-"
+                      : "-"}
+                  </td>
                   <td className="p-3">{t(ticket.priority)}</td>
                   <td className="p-3">
                     <span

@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import { canManagePerm } from "@/lib/authSession";
+import { accountingErrorText } from "@/lib/accountingErrors";
 
 type Account = { code: string; name_ar: string; parent_code: string | null };
 type Defaults = {
@@ -16,6 +17,24 @@ type Defaults = {
   payrollSocialInsuranceAccountCode: string; payrollDeductionsAccountCode: string;
 };
 type FiscalPeriod = { id: string; name: string; dateFrom: string; dateTo: string; status: "open" | "closed"; closedAt: string };
+
+// رموز أخطاء حفظ حسابات الترحيل الافتراضية (save_accounting_posting_defaults) غير الموجودة في accountingErrorText
+// الترتيب مهم: PAYROLL_PAYABLE قبل PAYABLE لأن المطابقة بجزء من النص
+const POSTING_RULE_ERRORS: Array<[string, string]> = [
+  ["PAYROLL_PAYABLE_ACCOUNT_CLASS_INVALID", "حساب الرواتب المستحقة يجب أن يكون من الالتزامات (يبدأ بـ 2)."],
+  ["RECEIVABLE_ACCOUNT_CLASS_INVALID", "حساب ذمم العملاء يجب أن يكون من الأصول (يبدأ بـ 1)."],
+  ["REVENUE_ACCOUNT_CLASS_INVALID", "حساب إيرادات المبيعات يجب أن يكون من الإيرادات (يبدأ بـ 4)."],
+  ["OUTPUT_VAT_ACCOUNT_CLASS_INVALID", "حساب ضريبة المخرجات يجب أن يكون من الالتزامات (يبدأ بـ 2)."],
+  ["PAYABLE_ACCOUNT_CLASS_INVALID", "حساب ذمم الموردين يجب أن يكون من الالتزامات (يبدأ بـ 2)."],
+  ["PURCHASE_ACCOUNT_CLASS_INVALID", "حساب المشتريات والمصروفات يجب أن يكون من المصروفات (يبدأ بـ 5)."],
+  ["INPUT_VAT_ACCOUNT_CLASS_INVALID", "حساب ضريبة المدخلات يجب أن يبدأ بـ 2."],
+  ["INVENTORY_SHORTAGE_ACCOUNT_CLASS_INVALID", "حساب عجز المخزون يجب أن يكون من المصروفات (يبدأ بـ 5)."],
+  ["INVENTORY_SURPLUS_ACCOUNT_CLASS_INVALID", "حساب فائض المخزون يجب أن يكون من الإيرادات (يبدأ بـ 4)."],
+  ["PAYROLL_EXPENSE_ACCOUNT_CLASS_INVALID", "حساب مصروف الرواتب يجب أن يكون من المصروفات (يبدأ بـ 5)."],
+  ["PAYROLL_SOCIAL_ACCOUNT_CLASS_INVALID", "حساب التأمينات الاجتماعية المستحقة يجب أن يكون من الالتزامات (يبدأ بـ 2)."],
+  ["PAYROLL_DEDUCTIONS_ACCOUNT_CLASS_INVALID", "حساب استقطاعات الموظفين المستحقة يجب أن يكون من الالتزامات (يبدأ بـ 2)."],
+  ["ACCOUNTING_POSTING_RULE_NOT_FOUND", "قاعدة الترحيل الافتراضية غير موجودة أو غير مفعّلة لهذه المنشأة."],
+];
 
 const initialDefaults: Defaults = {
   receivableAccountCode: "", revenueAccountCode: "", outputVatAccountCode: "",
@@ -40,6 +59,13 @@ export default function AccountingSettings() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  // كل أخطاء الصفحة (الفترات المالية وحسابات الترحيل) بالعربية بدل رموز القاعدة
+  const errorText = (message: string) => {
+    const raw = String(message ?? "");
+    const postingError = POSTING_RULE_ERRORS.find(([code]) => raw.includes(code));
+    return postingError ? t(postingError[1]) : accountingErrorText(raw, t);
+  };
+
   const load = async () => {
     setLoading(true); setError("");
     const [accountResult, ruleResult, periodResult] = await Promise.all([
@@ -48,7 +74,7 @@ export default function AccountingSettings() {
       supabase.from("accounting_fiscal_periods").select("id, name, date_from, date_to, status, closed_at").order("date_from", { ascending: false }),
     ]);
     const firstError = accountResult.error ?? ruleResult.error ?? periodResult.error;
-    if (firstError) { setError(firstError.message); setLoading(false); return; }
+    if (firstError) { setError(errorText(firstError.message)); setLoading(false); return; }
     const allAccounts = (accountResult.data ?? []) as Account[];
     setAccounts(allAccounts.filter((account) => !allAccounts.some((child) => child.parent_code === account.code)));
     if (ruleResult.data) setDefaults({
@@ -76,7 +102,7 @@ export default function AccountingSettings() {
     setBusy(true); setError("");
     const { error: saveError } = await supabase.rpc("save_accounting_posting_defaults", { p_defaults: defaults });
     setBusy(false);
-    if (saveError) { setError(saveError.message); return; }
+    if (saveError) { setError(errorText(saveError.message)); return; }
     toast({ title: t("تم حفظ حسابات الترحيل الافتراضية") });
     await load();
   };
@@ -95,7 +121,7 @@ export default function AccountingSettings() {
       p_id: editingId || null, p_name: periodName.trim(), p_date_from: dateFrom, p_date_to: dateTo,
     });
     setBusy(false);
-    if (saveError) { setError(saveError.message); return; }
+    if (saveError) { setError(errorText(saveError.message)); return; }
     toast({ title: t("تم حفظ الفترة المالية") }); closeForm(); await load();
   };
 
@@ -108,7 +134,7 @@ export default function AccountingSettings() {
     setBusy(true);
     const { error: statusError } = await supabase.rpc("set_accounting_fiscal_period_status", { p_id: period.id, p_status: nextStatus });
     setBusy(false);
-    if (statusError) { toast({ title: t("تعذر تغيير حالة الفترة"), description: statusError.message, variant: "destructive" }); return; }
+    if (statusError) { toast({ title: t("تعذر تغيير حالة الفترة"), description: errorText(statusError.message), variant: "destructive" }); return; }
     toast({ title: t(nextStatus === "closed" ? "تم إغلاق الفترة المالية" : "تم فتح الفترة المالية") }); await load();
   };
 
@@ -117,7 +143,7 @@ export default function AccountingSettings() {
     setBusy(true);
     const { error: deleteError } = await supabase.rpc("delete_accounting_fiscal_period", { p_id: period.id });
     setBusy(false);
-    if (deleteError) { toast({ title: t("تعذر حذف الفترة"), description: deleteError.message, variant: "destructive" }); return; }
+    if (deleteError) { toast({ title: t("تعذر حذف الفترة"), description: errorText(deleteError.message), variant: "destructive" }); return; }
     toast({ title: t("تم حذف الفترة المالية") }); await load();
   };
 

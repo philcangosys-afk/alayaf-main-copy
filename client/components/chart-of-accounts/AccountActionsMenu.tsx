@@ -1,4 +1,4 @@
-import { MoreHorizontal, Pencil, Trash2, Plus, Building2 } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2, Plus, Building2, WalletCards } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useI18n } from "@/i18n";
 import type { AccountNode } from "./accountData";
@@ -8,7 +8,12 @@ type Props = {
   onEdit: () => void;
   onDelete: () => void;
   onAddSubAccount: () => void;
+  /** ينشئ حساب دليل فرعيًا ومعه حساب بنكي (save_accounting_bank_account) */
   onAddBankSubAccount: () => void;
+  /** ينشئ حساب دليل فرعيًا ومعه صندوق نقدي */
+  onAddCashSubAccount: () => void;
+  /** الحساب داخل «النقد وما يعادله» (111) وليس تحت الشيكات (1112) */
+  cashSubtree: boolean;
 };
 
 export default function AccountActionsMenu({
@@ -17,6 +22,8 @@ export default function AccountActionsMenu({
   onDelete,
   onAddSubAccount,
   onAddBankSubAccount,
+  onAddCashSubAccount,
+  cashSubtree,
 }: Props) {
   const { t, direction } = useI18n();
   const [open, setOpen] = useState(false);
@@ -92,18 +99,30 @@ export default function AccountActionsMenu({
             <span>{t("إضافة حساب فرعي")}</span>
           </button>
 
-          {/* Add Sub Account as Bank */}
+          {/* Add Sub Account as Bank / Cash box: creates the chart account and the bank row together */}
           <button
-            onClick={() => { onAddBankSubAccount(); setOpen(false); }}
-            aria-label={t("إضافة حساب فرعي كحساب بنك")}
-            className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-foreground hover:bg-muted/40 transition"
+            onClick={() => { if (cashSubtree) { onAddBankSubAccount(); setOpen(false); } }}
+            disabled={!cashSubtree}
+            aria-label={t("إضافة حساب بنكي فرعي")}
+            className={`flex w-full items-center gap-2 px-4 py-2.5 text-sm transition ${cashSubtree ? "text-foreground hover:bg-muted/40" : "text-muted-foreground cursor-not-allowed"}`}
           >
             <Building2 className="h-4 w-4 text-muted-foreground" />
-            <span>{t("إضافة حساب فرعي كحساب بنك")}</span>
+            <span>{t("إضافة حساب بنكي فرعي")}</span>
+          </button>
+          <button
+            onClick={() => { if (cashSubtree) { onAddCashSubAccount(); setOpen(false); } }}
+            disabled={!cashSubtree}
+            aria-label={t("إضافة صندوق نقدي فرعي")}
+            className={`flex w-full items-center gap-2 px-4 py-2.5 text-sm transition ${cashSubtree ? "text-foreground hover:bg-muted/40" : "text-muted-foreground cursor-not-allowed"}`}
+          >
+            <WalletCards className="h-4 w-4 text-muted-foreground" />
+            <span>{t("إضافة صندوق نقدي فرعي")}</span>
           </button>
 
           <div className={`mx-3 mb-2 mt-1 text-xs text-muted-foreground ${direction === "rtl" ? "text-right" : "text-left"} leading-relaxed`}>
-            {t("سيتم أيضاً إنشاء حساب بنكي في وحدة الحسابات البنكية. تتيح لك الحسابات البنكية تسجيل المعاملات المصرفية بسهولة واستيراد كشف الحساب ومطابقته.")}
+            {cashSubtree
+              ? t("يُنشأ حساب فرعي جديد في الشجرة ومعه حساب بنكي أو صندوق مربوط به في صفحة الحسابات البنكية، فيظهر في الدفع والتحصيل ومطابقة كشف البنك.")
+              : t("إضافة بنك أو صندوق متاحة فقط تحت «النقد وما يعادله» (111)، وليس تحت الشيكات (1112).")}
           </div>
         </div>
       )}

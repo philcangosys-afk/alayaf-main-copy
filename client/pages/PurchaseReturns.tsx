@@ -14,9 +14,10 @@ import {
   RotateCcw,
   Printer,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, escapeHtml, riyadhDateString } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
+import { dbErrorText } from "@/lib/dbErrors";
 import {
   PageHeader,
   FilterBar,
@@ -130,7 +131,7 @@ export default function PurchaseReturns() {
       setReturns((prev) => prev.filter((r) => r.id !== id));
       toast({ title: "تم الحذف", description: `المردود: ${id}` });
     } else {
-      toast({ title: "تعذّر الحذف", description: error.message });
+      toast({ title: "تعذّر الحذف", description: dbErrorText(error.message) ?? "تعذّر حذف المردود. حاول مرة أخرى." });
     }
   };
 
@@ -145,19 +146,19 @@ export default function PurchaseReturns() {
       const lineTotal = item.returnedQty * item.price;
       const tax = (lineTotal * item.taxPercent) / 100;
       return `<tr>
-        <td>${item.description || "-"}</td>
-        <td>${item.originalQty}</td>
-        <td>${item.returnedQty}</td>
-        <td>${item.price.toFixed(2)}</td>
-        <td>${item.taxPercent}%</td>
-        <td>${item.costCenter || "-"}</td>
+        <td>${escapeHtml(item.description || "-")}</td>
+        <td>${escapeHtml(item.originalQty)}</td>
+        <td>${escapeHtml(item.returnedQty)}</td>
+        <td>${Number(item.price || 0).toFixed(2)}</td>
+        <td>${escapeHtml(item.taxPercent)}%</td>
+        <td>${escapeHtml(item.costCenter || "-")}</td>
         <td>${(lineTotal + tax).toFixed(2)}</td>
       </tr>`;
     }).join("");
 
     printWindow.document.write(`
       <html dir="rtl" lang="ar">
-        <head><title>مردود مشتريات ${ret.id}</title><meta charset="utf-8"/>
+        <head><title>مردود مشتريات ${escapeHtml(ret.id)}</title><meta charset="utf-8"/>
         <style>body{font-family:Arial,sans-serif;padding:24px;color:#0f172a}
         .header{display:flex;justify-content:space-between;border-bottom:2px solid #dc2626;padding-bottom:12px;margin-bottom:16px}
         .title{font-size:22px;font-weight:700;color:#dc2626}
@@ -168,18 +169,18 @@ export default function PurchaseReturns() {
         th,td{border:1px solid #e2e8f0;padding:8px;text-align:right}
         th{background:#fef2f2;font-weight:600}</style></head>
         <body>
-        <div class="header"><div class="title">مردود مشتريات</div><div>رقم المردود: <strong>${ret.id.slice(0, 8)}</strong></div></div>
+        <div class="header"><div class="title">مردود مشتريات</div><div>رقم المردود: <strong>${escapeHtml(ret.id.slice(0, 8))}</strong></div></div>
         <div class="grid">
-          <div class="card"><div class="label">المورد</div><div class="value">${ret.vendor || "-"}</div></div>
-          <div class="card"><div class="label">التاريخ</div><div class="value">${ret.date}</div></div>
-          <div class="card"><div class="label">رقم أمر الشراء</div><div class="value">${ret.poNumber || "-"}</div></div>
-          <div class="card"><div class="label">سبب الإرجاع</div><div class="value">${ret.returnReason || "-"}</div></div>
-          <div class="card"><div class="label">الإجمالي</div><div class="value">${ret.total} ريال</div></div>
-          <div class="card"><div class="label">الحالة</div><div class="value">${ret.status}</div></div>
+          <div class="card"><div class="label">المورد</div><div class="value">${escapeHtml(ret.vendor || "-")}</div></div>
+          <div class="card"><div class="label">التاريخ</div><div class="value">${escapeHtml(ret.date)}</div></div>
+          <div class="card"><div class="label">رقم أمر الشراء</div><div class="value">${escapeHtml(ret.poNumber || "-")}</div></div>
+          <div class="card"><div class="label">سبب الإرجاع</div><div class="value">${escapeHtml(ret.returnReason || "-")}</div></div>
+          <div class="card"><div class="label">الإجمالي</div><div class="value">${escapeHtml(ret.total)} ريال</div></div>
+          <div class="card"><div class="label">الحالة</div><div class="value">${escapeHtml(ret.status)}</div></div>
         </div>
         <table><thead><tr><th>الوصف</th><th>الكمية الأصلية</th><th>تم إرجاعها</th><th>السعر</th><th>الضريبة</th><th>مركز التكلفة</th><th>الإجمالي</th></tr></thead>
         <tbody>${rows}</tbody></table>
-        ${ret.notes ? `<p style="margin-top:16px;font-size:13px"><strong>ملاحظات:</strong> ${ret.notes}</p>` : ""}
+        ${ret.notes ? `<p style="margin-top:16px;font-size:13px"><strong>ملاحظات:</strong> ${escapeHtml(ret.notes)}</p>` : ""}
         </body></html>`);
     printWindow.document.close();
     printWindow.focus();
@@ -427,7 +428,7 @@ function ReturnDetails({ ret, onBack, onEdit, onPrintPdf }: {
 
 /* ── Shared Form Hook ── */
 function useReturnForm(initial?: Partial<PurchaseReturn>) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = riyadhDateString();
   const [form, setForm] = useState({
     vendor: initial?.vendor ?? "",
     date: initial?.date ?? today,
@@ -714,7 +715,7 @@ function ReturnForm({ onBack, onSaved }: { onBack: () => void; onSaved: (r: Purc
     const { error: insertError } = await supabase.from("purchase_returns").insert([payload]);
     setSaving(false);
 
-    if (insertError) { setError("حدث خطأ أثناء الحفظ: " + insertError.message); return; }
+    if (insertError) { setError("حدث خطأ أثناء الحفظ: " + (dbErrorText(insertError.message) ?? "حاول مرة أخرى.")); return; }
 
     onSaved({
       id: newId, ...form,
@@ -773,7 +774,7 @@ function ReturnEdit({ ret, onBack, onUpdated }: { ret: PurchaseReturn; onBack: (
         items,
       });
     } else {
-      setError("تعذّر التحديث: " + updateError.message);
+      setError("تعذّر التحديث: " + (dbErrorText(updateError.message) ?? "حاول مرة أخرى."));
     }
   };
 

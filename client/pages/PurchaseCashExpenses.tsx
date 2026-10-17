@@ -6,6 +6,7 @@ import { ChangeEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "@/hooks/use-toast";
 import { useI18n } from "@/i18n";
+import { riyadhDateString } from "@/lib/utils";
 
 type CashExpense = {
   id: string;
@@ -40,7 +41,7 @@ const getEmptyForm = (num: number): ExpenseForm => ({
   contractRef: "",
   category: "",
   branch: "",
-  date: new Date().toISOString().split("T")[0],
+  date: riyadhDateString(),
   currency: "SAR",
   mainAccount: "",
   beneficiary: "",

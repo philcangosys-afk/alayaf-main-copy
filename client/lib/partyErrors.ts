@@ -2,6 +2,7 @@
  * العملاء والموردون: توحيد الاسم للمقارنة ورسائل أخطاء القاعدة.
  * الاسم مفتاح كشف الحساب في القيود (counterparty)، لذلك تمنع القاعدة تكراره وتغييره بعد وجود مستندات.
  */
+import { dbErrorText } from "@/lib/dbErrors";
 
 /** توحيد الاسم للمقارنة: نفس قاعدة الفهرس الفريد في القاعدة (المسافات وحالة الأحرف). */
 export const normalizePartyName = (value: string) => value.trim().replace(/\s+/g, " ").toLowerCase();
@@ -25,5 +26,5 @@ export function partyErrorText(message: string, isVendor: boolean): string {
   if (text.includes("commercial_registration_check")) return "السجل التجاري يجب أن يتكون من 10 إلى 15 رقمًا";
   if (text.includes("tax_number_check")) return "الرقم الضريبي السعودي 15 رقمًا يبدأ وينتهي بالرقم 3";
   if (/row-level security|permission denied/i.test(text)) return "لا تملك صلاحية تنفيذ هذا الإجراء.";
-  return text;
+  return dbErrorText(text) ?? text;
 }

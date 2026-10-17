@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
 import { supabase } from "@/lib/supabaseClient";
 import { useI18n } from "@/i18n";
+import { riyadhDateString } from "@/lib/utils";
+import { dbErrorOr } from "@/lib/dbErrors";
 
 export type DocumentTemplateId =
   | "invoice"
@@ -68,7 +70,7 @@ const defaultFields = (template: TemplateDefinition): TemplateField[] => [
   { id: "email", section: "party", labelAr: "البريد الإلكتروني", labelEn: "Email", content: "—", visible: true },
   { id: "phone", section: "party", labelAr: "رقم الهاتف", labelEn: "Phone number", content: "—", visible: true },
   { id: "number", section: "document", labelAr: template.numberLabelAr, labelEn: template.numberLabelEn, content: template.number, visible: true },
-  { id: "date", section: "document", labelAr: "التاريخ", labelEn: "Date", content: new Intl.DateTimeFormat("en-CA").format(new Date()), visible: true },
+  { id: "date", section: "document", labelAr: "التاريخ", labelEn: "Date", content: riyadhDateString(), visible: true },
   { id: "reference", section: "document", labelAr: "المرجع", labelEn: "Reference", content: "—", visible: true },
   { id: "currency", section: "document", labelAr: "العملة", labelEn: "Currency", content: "SAR", visible: template.hasAmounts },
   { id: "description", section: "table", labelAr: "الوصف", labelEn: "Description", content: "—", visible: true },
@@ -107,10 +109,20 @@ const fromRow = (row: Record<string, unknown>): TemplateSettings => {
   const templateKey = String(row.template_key) as DocumentTemplateId;
   const defaults = DEFAULT_SETTINGS[templateKey];
   const savedFields = Array.isArray(row.fields) ? row.fields as TemplateField[] : [];
-  const savedById = new Map(savedFields.map((field) => [field.id, field]));
+  const defaultsById = new Map(defaults.fields.map((field) => [field.id, field]));
+  // الترتيب المحفوظ أولًا (مع دمج الحقل الافتراضي بنسخته المحفوظة)، ثم الحقول الافتراضية غير الموجودة في المحفوظ بترتيبها الافتراضي.
+  const seenIds = new Set<string>();
+  const orderedSaved: TemplateField[] = [];
+  savedFields.forEach((field) => {
+    if (!field || typeof field.id !== "string" || seenIds.has(field.id)) return;
+    const base = defaultsById.get(field.id);
+    if (!base && !field.custom) return;
+    seenIds.add(field.id);
+    orderedSaved.push(base ? { ...base, ...field } : field);
+  });
   const fields = [
-    ...defaults.fields.map((field) => ({ ...field, ...savedById.get(field.id) })),
-    ...savedFields.filter((field) => field.custom && !defaults.fields.some((item) => item.id === field.id)),
+    ...orderedSaved,
+    ...defaults.fields.filter((field) => !seenIds.has(field.id)),
   ];
 
   return {
@@ -265,7 +277,7 @@ export default function DocumentTemplateWorkspace() {
     }, { onConflict: "company_id,template_key" });
     setSaving(false);
     if (error) {
-      toast.error(`${t("تعذر حفظ القالب")}: ${error.message}`);
+      toast.error(`${t("تعذر حفظ القالب")}: ${t(dbErrorOr(error.message))}`);
       return;
     }
     toast.success(t("تم حفظ القالب"));

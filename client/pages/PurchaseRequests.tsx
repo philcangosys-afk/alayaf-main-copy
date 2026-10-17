@@ -18,8 +18,9 @@ import {
   Save,
   Loader2,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, riyadhDateString } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient";
+import { dbErrorText } from "@/lib/dbErrors";
 import {
   PageHeader,
   FilterBar,
@@ -193,7 +194,7 @@ function RequestForm({
   onBack: () => void;
   onSaved: () => void;
 }) {
-  const today = new Date().toISOString().split("T")[0];
+  const today = riyadhDateString();
 
   const [form, setForm] = useState({
     date: today,
@@ -308,7 +309,7 @@ function RequestForm({
     setSaving(false);
 
     if (insertError) {
-      setError("حدث خطأ أثناء الحفظ: " + insertError.message);
+      setError("حدث خطأ أثناء الحفظ: " + (dbErrorText(insertError.message) ?? "حاول مرة أخرى."));
       return;
     }
 

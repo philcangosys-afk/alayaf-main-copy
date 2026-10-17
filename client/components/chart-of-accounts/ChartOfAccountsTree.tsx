@@ -1,11 +1,12 @@
-import { Search, ChevronDown, ChevronLeft, ChevronRight, Info } from "lucide-react";
+import { Search, ChevronDown, ChevronLeft, ChevronRight, Info, Landmark, Loader2, Trash2, WalletCards, X } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import type { AccountNode } from "./accountData";
-import { CATEGORY_COLORS } from "./accountData";
+import { CATEGORY_COLORS, canHoldBankOrCash } from "./accountData";
 import AccountActionsMenu from "./AccountActionsMenu";
 import AccountEditPanel from "./AccountEditPanel";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
+import { accountingErrorText } from "@/lib/accountingErrors";
 import { useI18n } from "@/i18n";
 
 const getAccountDisplayName = (account: AccountNode, locale: "ar" | "en") =>
@@ -23,6 +24,19 @@ const DEFAULT_SALES_RULE: SalesPostingRule = {
   outputVatAccountCode: "219",
 };
 
+// إضافة بنك أو صندوق تحت حساب من الدليل: الخادم ينشئ الحساب الفرعي والحساب البنكي معًا
+type BankDraft = { parent: AccountNode; kind: "bank" | "cash"; name: string; bankName: string; iban: string };
+
+const toAccountNode = (row: Record<string, unknown>): AccountNode => ({
+  code: String(row.code), nameAr: String(row.name_ar ?? ""), nameEn: String(row.name_en ?? ""),
+  cashFlowType: String(row.cash_flow_type ?? ""), enablePayments: Boolean(row.enable_payments),
+  showExpenseClaims: Boolean(row.show_expense_claims), accountType: String(row.account_type ?? ""),
+  level: Number(row.level), isMainCategory: Boolean(row.is_main_category),
+  categoryColor: row.category_color ? String(row.category_color) : undefined,
+  currencyBadge: row.currency_badge ? String(row.currency_badge) : undefined,
+  isSystem: Boolean(row.is_system), parentCode: String(row.parent_code ?? ""),
+});
+
 export default function ChartOfAccountsTree() {
   const { t, locale, direction } = useI18n();
   const [accounts, setAccounts] = useState<AccountNode[]>([]);
@@ -32,36 +46,32 @@ export default function ChartOfAccountsTree() {
   const [activeTab, setActiveTab] = useState<"tree" | "list">("tree");
   const [hoveredSystem, setHoveredSystem] = useState<string | null>(null);
   const [salesPostingRule, setSalesPostingRule] = useState<SalesPostingRule>(DEFAULT_SALES_RULE);
+  const [deletingAccount, setDeletingAccount] = useState<AccountNode | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [bankDraft, setBankDraft] = useState<BankDraft | null>(null);
+  const [bankBusy, setBankBusy] = useState(false);
+  const [bankError, setBankError] = useState("");
+
+  const fetchAccounts = async () => {
+    const { data, error } = await supabase
+      .from("accounting_accounts")
+      .select("*")
+      .order("code");
+
+    if (error) {
+      toast({ title: t("تعذر تحميل الحسابات"), description: accountingErrorText(error.message, t), variant: "destructive" });
+      return false;
+    }
+
+    if (data?.length) {
+      setAccounts((data as Record<string, unknown>[]).map(toAccountNode));
+    }
+    return true;
+  };
 
   useEffect(() => {
     const loadAccounts = async () => {
-      const { data, error } = await supabase
-        .from("accounting_accounts")
-        .select("*")
-        .order("code");
-
-      if (error) {
-        toast({ title: t("تعذر تحميل الحسابات"), description: error.message, variant: "destructive" });
-        return;
-      }
-
-      if (data?.length) {
-        setAccounts(data.map((row) => ({
-          code: row.code,
-          nameAr: row.name_ar,
-          nameEn: row.name_en,
-          cashFlowType: row.cash_flow_type,
-          enablePayments: row.enable_payments,
-          showExpenseClaims: row.show_expense_claims,
-          accountType: row.account_type,
-          level: row.level,
-          isMainCategory: row.is_main_category,
-          categoryColor: row.category_color ?? undefined,
-          currencyBadge: row.currency_badge ?? undefined,
-          isSystem: row.is_system,
-          parentCode: row.parent_code ?? "",
-        })));
-      }
+      if (!(await fetchAccounts())) return;
 
       const { data: rule } = await supabase
         .from("accounting_posting_rules")
@@ -88,7 +98,7 @@ export default function ChartOfAccountsTree() {
     });
 
     if (error) {
-      toast({ title: t("تعذر حفظ قواعد الترحيل"), description: error.message, variant: "destructive" });
+      toast({ title: t("تعذر حفظ قواعد الترحيل"), description: accountingErrorText(error.message, t), variant: "destructive" });
       return;
     }
     toast({ title: t("تم حفظ قواعد الترحيل"), description: t("ستُستخدم الحسابات المحددة في الفواتير والإشعارات الجديدة") });
@@ -155,20 +165,11 @@ export default function ChartOfAccountsTree() {
     });
 
     if (error || !data) {
-      toast({ title: t("تعذر حفظ الحساب"), description: error?.message ?? t("حاول مرة أخرى"), variant: "destructive" });
+      toast({ title: t("تعذر حفظ الحساب"), description: error?.message ? accountingErrorText(error.message, t) : t("حاول مرة أخرى"), variant: "destructive" });
       return;
     }
 
-    const row = data as Record<string, unknown>;
-    const saved: AccountNode = {
-      code: String(row.code), nameAr: String(row.name_ar), nameEn: String(row.name_en ?? ""),
-      cashFlowType: String(row.cash_flow_type ?? ""), enablePayments: Boolean(row.enable_payments),
-      showExpenseClaims: Boolean(row.show_expense_claims), accountType: String(row.account_type ?? ""),
-      level: Number(row.level), isMainCategory: Boolean(row.is_main_category),
-      categoryColor: row.category_color ? String(row.category_color) : undefined,
-      currencyBadge: row.currency_badge ? String(row.currency_badge) : undefined,
-      isSystem: Boolean(row.is_system), parentCode: String(row.parent_code ?? ""),
-    };
+    const saved = toAccountNode(data as Record<string, unknown>);
     setAccounts((prev) => prev.some((account) => account.code === saved.code)
       ? prev.map((account) => account.code === saved.code ? saved : account)
       : [...prev, saved].sort((first, second) => first.code.localeCompare(second.code, undefined, { numeric: true })));
@@ -176,7 +177,8 @@ export default function ChartOfAccountsTree() {
     toast({ title: t("تم الحفظ"), description: t("تم تحديث بيانات الحساب وربطه بقاعدة البيانات") });
   };
 
-  const handleDeleteAccount = async (code: string) => {
+  // الحذف يمر بنافذة تأكيد تعرض رمز الحساب واسمه، ثم يُنفَّذ من confirmDeleteAccount
+  const handleDeleteAccount = (code: string) => {
     const account = accounts.find((a) => a.code === code);
     if (!account) return;
 
@@ -199,17 +201,71 @@ export default function ChartOfAccountsTree() {
       return;
     }
 
+    setDeletingAccount(account);
+  };
+
+  const confirmDeleteAccount = async () => {
+    if (!deletingAccount) return;
+    const code = deletingAccount.code;
+    setDeleteBusy(true);
     const { error } = await supabase.rpc("delete_accounting_account", { p_code: code });
+    setDeleteBusy(false);
     if (error) {
-      toast({ title: t("تعذر حذف الحساب"), description: error.message, variant: "destructive" });
+      toast({ title: t("تعذر حذف الحساب"), description: accountingErrorText(error.message, t), variant: "destructive" });
       return;
     }
 
+    setDeletingAccount(null);
     setAccounts((prev) => prev.filter((a) => a.code !== code));
     toast({ title: t("تم الحذف"), description: t("تم حذف الحساب من قاعدة البيانات") });
   };
 
-  const handleAddSubAccount = (parentCode: string, isBank = false) => {
+  const openBankDraft = (parentCode: string, kind: "bank" | "cash") => {
+    const parent = accounts.find((a) => a.code === parentCode);
+    if (!parent) return;
+    if (!canHoldBankOrCash(parentCode, accounts)) {
+      toast({ title: t("لا يمكن الإضافة هنا"), description: accountingErrorText("BANK_ACCOUNT_PARENT_INVALID", t), variant: "destructive" });
+      return;
+    }
+    setBankError("");
+    setBankDraft({ parent, kind, name: "", bankName: "", iban: "" });
+  };
+
+  // ينشئ حساب الدليل الفرعي التالي تحت الحساب المختار ومعه صف الحساب البنكي/الصندوق (save_accounting_bank_account)
+  const saveBankDraft = async () => {
+    if (!bankDraft) return;
+    const name = bankDraft.name.trim().replace(/\s+/g, " ");
+    const iban = bankDraft.kind === "bank" ? bankDraft.iban.replace(/[\s-]/g, "").toUpperCase() : "";
+    if (!name) { setBankError(accountingErrorText("BANK_ACCOUNT_NAME_REQUIRED", t)); return; }
+    if (iban && !/^SA[0-9]{22}$/.test(iban)) { setBankError(accountingErrorText("BANK_ACCOUNT_IBAN_INVALID", t)); return; }
+    setBankBusy(true); setBankError("");
+    const { data, error } = await supabase.rpc("save_accounting_bank_account", {
+      p_account: {
+        kind: bankDraft.kind,
+        name,
+        bankName: bankDraft.kind === "bank" ? bankDraft.bankName.trim() : "",
+        iban,
+        parentCode: bankDraft.parent.code,
+      },
+    });
+    setBankBusy(false);
+    if (error) { setBankError(accountingErrorText(error.message, t)); return; }
+    const created = (data ?? {}) as Record<string, unknown>;
+    const parentCode = bankDraft.parent.code;
+    setBankDraft(null);
+    setCollapsedCodes((prev) => {
+      const next = new Set(prev);
+      next.delete(parentCode);
+      return next;
+    });
+    await fetchAccounts();
+    toast({
+      title: t(bankDraft.kind === "bank" ? "تم إنشاء الحساب البنكي" : "تم إنشاء الصندوق"),
+      description: `${name} — ${t("رمزه في شجرة الحسابات")}: ${String(created.account_code ?? "")}. ${t("يظهر الآن في صفحة الحسابات البنكية وفي اختيارات الدفع والتحصيل.")}`,
+    });
+  };
+
+  const handleAddSubAccount = (parentCode: string) => {
     const parent = accounts.find((a) => a.code === parentCode);
     if (!parent) return;
 
@@ -227,14 +283,14 @@ export default function ChartOfAccountsTree() {
 
     const newAccount: AccountNode = {
       code: newCode,
-      nameAr: isBank ? "حساب بنكي جديد" : "حساب فرعي جديد",
-      nameEn: isBank ? "New Bank Account" : "New Sub Account",
+      nameAr: "حساب فرعي جديد",
+      nameEn: "New Sub Account",
       cashFlowType: parent.cashFlowType || "التشغيليات",
-      enablePayments: isBank,
+      enablePayments: false,
       showExpenseClaims: false,
       accountType: parent.accountType || "التشغيليات",
       level: parent.level + 1,
-      currencyBadge: isBank ? "SAR" : undefined,
+      currencyBadge: undefined,
       isSystem: false,
       parentCode: parentCode,
     };
@@ -383,7 +439,9 @@ export default function ChartOfAccountsTree() {
                       onEdit={() => setEditingAccount(account)}
                       onDelete={() => handleDeleteAccount(account.code)}
                       onAddSub={() => handleAddSubAccount(account.code)}
-                      onAddBank={() => handleAddSubAccount(account.code, true)}
+                      onAddBank={() => openBankDraft(account.code, "bank")}
+                      onAddCash={() => openBankDraft(account.code, "cash")}
+                      cashSubtree={canHoldBankOrCash(account.code, accounts)}
                       hoveredSystem={hoveredSystem}
                       setHoveredSystem={setHoveredSystem}
                     />
@@ -400,7 +458,9 @@ export default function ChartOfAccountsTree() {
                     onEdit={() => setEditingAccount(account)}
                     onDelete={() => handleDeleteAccount(account.code)}
                     onAddSub={() => handleAddSubAccount(account.code)}
-                    onAddBank={() => handleAddSubAccount(account.code, true)}
+                    onAddBank={() => openBankDraft(account.code, "bank")}
+                    onAddCash={() => openBankDraft(account.code, "cash")}
+                    cashSubtree={canHoldBankOrCash(account.code, accounts)}
                     hoveredSystem={hoveredSystem}
                     setHoveredSystem={setHoveredSystem}
                   />
@@ -419,6 +479,103 @@ export default function ChartOfAccountsTree() {
           onClose={() => setEditingAccount(null)}
           onSave={handleSaveAccount}
         />
+      )}
+
+      {/* تأكيد حذف الحساب */}
+      {deletingAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" dir={direction} onMouseDown={() => { if (!deleteBusy) setDeletingAccount(null); }}>
+          <div className="w-full max-w-md rounded-xl border border-border bg-white shadow-xl" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h2 className="text-base font-semibold text-foreground">{t("حذف الحساب")}</h2>
+              <button onClick={() => setDeletingAccount(null)} disabled={deleteBusy} aria-label={t("إغلاق")} className="p-1 text-muted-foreground hover:text-foreground">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-3 p-5 text-sm">
+              <p className="text-foreground">{t("هل تريد حذف هذا الحساب من شجرة الحسابات؟")}</p>
+              <div className="rounded-lg border border-border bg-slate-50 px-3 py-2">
+                <span className="font-mono font-semibold">{deletingAccount.code}</span>
+                <span className="text-muted-foreground"> — </span>
+                <span className="font-semibold">{getAccountDisplayName(deletingAccount, locale)}</span>
+              </div>
+              <p className="text-xs text-muted-foreground">{t("لا يمكن التراجع عن الحذف. يرفض الخادم حذف حساب عليه قيود أو مربوط بحساب بنكي أو بقواعد الترحيل.")}</p>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
+              <button onClick={() => setDeletingAccount(null)} disabled={deleteBusy} className="rounded-lg border border-border px-4 py-2 text-sm">{t("إلغاء")}</button>
+              <button onClick={() => void confirmDeleteAccount()} disabled={deleteBusy} className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50">
+                {deleteBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                {t("حذف الحساب")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* إضافة حساب بنكي أو صندوق تحت حساب من الدليل */}
+      {bankDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" dir={direction} onMouseDown={() => { if (!bankBusy) setBankDraft(null); }}>
+          <div className="w-full max-w-md rounded-xl border border-border bg-white shadow-xl" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
+                {bankDraft.kind === "bank" ? <Landmark className="h-4 w-4" /> : <WalletCards className="h-4 w-4" />}
+                {t(bankDraft.kind === "bank" ? "إضافة حساب بنكي فرعي" : "إضافة صندوق نقدي فرعي")}
+              </h2>
+              <button onClick={() => setBankDraft(null)} disabled={bankBusy} aria-label={t("إغلاق")} className="p-1 text-muted-foreground hover:text-foreground">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-3 p-5 text-sm">
+              <div className="space-y-1 rounded-lg bg-blue-50 px-3 py-2 text-xs leading-relaxed text-blue-800">
+                <p>
+                  {t("سيُنشأ حساب فرعي جديد برقم تلقائي في شجرة الحسابات تحت:")}{" "}
+                  <b className="font-mono">{bankDraft.parent.code}</b> — {getAccountDisplayName(bankDraft.parent, locale)}
+                </p>
+                <p>{t(bankDraft.kind === "bank" ? "ومعه حساب بنكي مربوط به في صفحة الحسابات البنكية، فيظهر في الدفع والتحصيل ومطابقة كشف البنك." : "ومعه صندوق نقدي مربوط به في صفحة الحسابات البنكية، فيظهر في الدفع والتحصيل.")}</p>
+              </div>
+              <label className="block text-xs text-muted-foreground">
+                {t(bankDraft.kind === "bank" ? "اسم الحساب" : "اسم الصندوق")}
+                <input
+                  value={bankDraft.name}
+                  onChange={(event) => setBankDraft({ ...bankDraft, name: event.target.value })}
+                  placeholder={t(bankDraft.kind === "bank" ? "مثال: البنك الأهلي - الجاري" : "مثال: صندوق الفرع")}
+                  className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                  autoFocus
+                />
+              </label>
+              {bankDraft.kind === "bank" && (
+                <>
+                  <label className="block text-xs text-muted-foreground">
+                    {t("اسم البنك")}
+                    <input
+                      value={bankDraft.bankName}
+                      onChange={(event) => setBankDraft({ ...bankDraft, bankName: event.target.value })}
+                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+                    />
+                  </label>
+                  <label className="block text-xs text-muted-foreground">
+                    {t("الآيبان (اختياري)")}
+                    <input
+                      value={bankDraft.iban}
+                      onChange={(event) => setBankDraft({ ...bankDraft, iban: event.target.value })}
+                      placeholder="SA00 0000 0000 0000 0000 0000"
+                      className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground"
+                      dir="ltr"
+                    />
+                  </label>
+                </>
+              )}
+              <p className="text-xs text-muted-foreground">{t("العملة: SAR. يمكن تعديل الاسم والآيبان أو إيقاف الحساب لاحقًا من صفحة الحسابات البنكية.")}</p>
+              {bankError && <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">{bankError}</p>}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
+              <button onClick={() => setBankDraft(null)} disabled={bankBusy} className="rounded-lg border border-border px-4 py-2 text-sm">{t("إلغاء")}</button>
+              <button onClick={() => void saveBankDraft()} disabled={bankBusy} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-white hover:bg-primary/90 disabled:opacity-50">
+                {bankBusy && <Loader2 className="h-4 w-4 animate-spin" />}
+                {t(bankDraft.kind === "bank" ? "إنشاء الحساب البنكي" : "إنشاء الصندوق")}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -467,6 +624,8 @@ function MainCategoryRow({
   onDelete,
   onAddSub,
   onAddBank,
+  onAddCash,
+  cashSubtree,
   hoveredSystem,
   setHoveredSystem,
 }: {
@@ -479,6 +638,8 @@ function MainCategoryRow({
   onDelete: () => void;
   onAddSub: () => void;
   onAddBank: () => void;
+  onAddCash: () => void;
+  cashSubtree: boolean;
   hoveredSystem: string | null;
   setHoveredSystem: (v: string | null) => void;
 }) {
@@ -547,6 +708,8 @@ function MainCategoryRow({
           onDelete={onDelete}
           onAddSubAccount={onAddSub}
           onAddBankSubAccount={onAddBank}
+          onAddCashSubAccount={onAddCash}
+          cashSubtree={cashSubtree}
         />
       </td>
     </tr>
@@ -563,6 +726,8 @@ function AccountRow({
   onDelete,
   onAddSub,
   onAddBank,
+  onAddCash,
+  cashSubtree,
   hoveredSystem,
   setHoveredSystem,
 }: {
@@ -574,6 +739,8 @@ function AccountRow({
   onDelete: () => void;
   onAddSub: () => void;
   onAddBank: () => void;
+  onAddCash: () => void;
+  cashSubtree: boolean;
   hoveredSystem: string | null;
   setHoveredSystem: (v: string | null) => void;
 }) {
@@ -662,6 +829,8 @@ function AccountRow({
           onDelete={onDelete}
           onAddSubAccount={onAddSub}
           onAddBankSubAccount={onAddBank}
+          onAddCashSubAccount={onAddCash}
+          cashSubtree={cashSubtree}
         />
       </td>
     </tr>

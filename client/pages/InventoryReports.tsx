@@ -6,6 +6,7 @@ import { COMPANY_REPORT_BRAND, exportReportExcel, printReport, type ReportColumn
 import { supabase } from "@/lib/supabaseClient";
 import { fetchPostedLedger, selectAllRows, type LedgerLine } from "@/lib/ledgerData";
 import { riyadhDateString } from "@/lib/utils";
+import { inventoryErrorText } from "@/lib/inventoryErrors";
 
 type ReportId = "balances" | "movements" | "monthly" | "issues" | "transfers" | "counts" | "adjustments" | "manufacturing" | "assembly" | "reconciliation";
 type Product = { id: string; sku: string; name_ar: string; name_en: string | null; unit: string; inventoryAccount: string };
@@ -28,8 +29,8 @@ const REPORTS: Array<{ id: ReportId; label: string; description: string }> = [
   { id: "transfers", label: "التحويلات بين المستودعات", description: "الكميات والقيم المحولة بين المستودعات خلال الفترة" },
   { id: "counts", label: "نتائج الجرد", description: "الكميات الدفترية والفعلية وفروقات عمليات الجرد" },
   { id: "adjustments", label: "تسويات المخزون", description: "تسويات العجز والفائض وحالة القيد المحاسبي" },
-  { id: "manufacturing", label: "أوامر التصنيع", description: "أوامر التصنيع وكميات المنتج النهائي والتكلفة الفعلية وحالة الترحيل المحاسبي" },
-  { id: "assembly", label: "أوامر التركيب", description: "أوامر التركيب وكميات المنتج المركب والتكلفة الفعلية وحالة الترحيل المحاسبي" },
+  { id: "manufacturing", label: "تقرير أوامر التصنيع", description: "أوامر التصنيع خلال الفترة: كمية المنتج النهائي والتكلفة الفعلية الإجمالية وتكلفة الوحدة وحالة الأمر والترحيل المحاسبي" },
+  { id: "assembly", label: "تقرير أوامر التركيب", description: "أوامر التركيب خلال الفترة: كمية المنتج المركب والتكلفة الفعلية الإجمالية وتكلفة الوحدة وحالة الأمر والترحيل المحاسبي" },
   { id: "reconciliation", label: "مطابقة المخزون والمحاسبة", description: "مقارنة قيمة دفتر المخزون برصيد حسابات أصل المخزون في الأستاذ العام حتى التاريخ المحدد" },
 ];
 
@@ -43,6 +44,21 @@ const amount = (value: unknown) => Number(value ?? 0) || 0;
 const movementValue = (movement: Pick<Movement, "quantity" | "unitCost">) =>
   movement.quantity * movement.unitCost;
 const isEmpty = (value: unknown) => value === null || value === undefined || value === "";
+// القيم الصغيرة جدًا (بقايا الفاصلة العشرية) والصفر السالب تُعرض صفرًا حتى لا يظهر «-0.00»
+const cleanNumber = (value: number, tolerance: number) => (Number.isFinite(value) && Math.abs(value) >= tolerance ? value : 0);
+
+/** أرقام القيود المقروءة (مثل 1001-JE-000007) لمعرّفات القيود؛ على دفعات حتى لا يطول رابط الطلب */
+async function fetchEntryNumbers(ids: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(ids.filter(Boolean))];
+  const chunks: string[][] = [];
+  for (let index = 0; index < unique.length; index += 150) chunks.push(unique.slice(index, index + 150));
+  const numbers = new Map<string, string>();
+  for (let index = 0; index < chunks.length; index += 4) {
+    const results = await Promise.all(chunks.slice(index, index + 4).map((chunk) => selectAllRows((from, to) => supabase.from("accounting_journal_entries").select("id, entry_number").in("id", chunk).order("id").range(from, to))));
+    results.forEach(({ data }) => (data ?? []).forEach((row) => { if (row.entry_number) numbers.set(String(row.id), String(row.entry_number)); }));
+  }
+  return numbers;
+}
 
 export default function InventoryReports() {
   const { t, direction, locale, formatNumber } = useI18n();
@@ -63,6 +79,7 @@ export default function InventoryReports() {
   const [journalLines, setJournalLines] = useState<JournalLine[]>([]);
   const [manufacturingOrders, setManufacturingOrders] = useState<ProductionOrder[]>([]);
   const [assemblyOrders, setAssemblyOrders] = useState<ProductionOrder[]>([]);
+  const [entryNumbers, setEntryNumbers] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const invalidRange = view !== "reconciliation" && dateFrom > dateTo;
@@ -94,10 +111,17 @@ export default function InventoryReports() {
     ]);
     const loadError = productsResult.error ?? warehousesResult.error ?? movementsResult.error ?? transfersResult.error ?? countsResult.error ?? countLinesResult.error ?? adjustmentsResult.error ?? adjustmentLinesResult.error ?? ledgerResult.error ?? manufacturingResult.error ?? assemblyResult.error;
     if (loadError) {
-      setError(loadError.message);
+      setError(inventoryErrorText(loadError.message, t));
       setLoading(false);
       return;
     }
+    // القيود تُعرض برقمها المقروء لا بمعرّفها الداخلي؛ تعذّر قراءتها لا يوقف التقرير
+    const journalIds = [
+      ...(movementsResult.data ?? []).filter((item) => item.source_table === "inventory_issues").map((item) => String(item.journal_entry_id ?? "")),
+      ...(manufacturingResult.data ?? []).map((item) => String(item.accounting_journal_entry_id ?? "")),
+      ...(assemblyResult.data ?? []).map((item) => String(item.accounting_journal_entry_id ?? "")),
+    ];
+    setEntryNumbers(await fetchEntryNumbers(journalIds).catch(() => new Map<string, string>()));
     setProducts((productsResult.data ?? []).map((item) => ({ id: String(item.id), sku: String(item.sku), name_ar: String(item.name_ar), name_en: item.name_en ? String(item.name_en) : null, unit: String(item.unit ?? ""), inventoryAccount: String(item.inventory_account_code ?? "") })));
     setWarehouses((warehousesResult.data ?? []).map((item) => ({ id: String(item.id), code: String(item.code), name_ar: String(item.name_ar) })));
     setMovements((movementsResult.data ?? []).map((item) => ({ id: String(item.id), number: String(item.movement_number), date: String(item.movement_date), createdAt: String(item.created_at ?? ""), type: String(item.movement_type), productId: String(item.product_id), warehouseId: String(item.warehouse_id), quantity: amount(item.quantity), unitCost: amount(item.unit_cost), sourceTable: String(item.source_table ?? ""), sourceId: String(item.source_id ?? ""), journalEntryId: String(item.journal_entry_id ?? "") })));
@@ -120,10 +144,12 @@ export default function InventoryReports() {
   const countById = useMemo(() => new Map(counts.map((count) => [count.id, count])), [counts]);
   const adjustmentById = useMemo(() => new Map(adjustments.map((adjustment) => [adjustment.id, adjustment])), [adjustments]);
   const currentReport = REPORTS.find((item) => item.id === view) ?? REPORTS[0];
-  const productName = (id: string) => { const product = productById.get(id); return product ? `${product.sku} - ${locale === "en" && product.name_en ? product.name_en : product.name_ar}` : id; };
-  const warehouseName = (id: string) => { const warehouse = warehouseById.get(id); return warehouse ? `${warehouse.code} - ${warehouse.name_ar}` : id; };
-  const money = (value: number) => formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const quantity = (value: number) => formatNumber(value, { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+  const productName = (id: string) => { const product = productById.get(id); return product ? `${product.sku} - ${locale === "en" && product.name_en ? product.name_en : product.name_ar}` : "—"; };
+  const warehouseName = (id: string) => { const warehouse = warehouseById.get(id); return warehouse ? `${warehouse.code} - ${warehouse.name_ar}` : "—"; };
+  const money = (value: number) => formatNumber(cleanNumber(value, 0.005), { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const quantity = (value: number) => formatNumber(cleanNumber(value, 0.00005), { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+  // رقم القيد المقروء؛ لا يُعرض معرّف القيد الداخلي أبدًا
+  const entryText = (id: string, fallback: string) => (id ? entryNumbers.get(id) || "—" : fallback);
 
   const report = useMemo<ReportResult>(() => {
     const matches = (productId: string, warehouseId: string) => (!productFilter || productId === productFilter) && (!warehouseFilter || warehouseId === warehouseFilter);
@@ -198,7 +224,7 @@ export default function InventoryReports() {
       const issueMovements = periodMovements.filter((movement) => movement.type === "issue" && movement.sourceTable === "inventory_issues");
       return {
         columns: [{ key: "date", label: t("التاريخ") }, { key: "number", label: t("رقم الحركة") }, { key: "item", label: t("الصنف") }, { key: "warehouse", label: t("المستودع") }, { key: "quantity", label: t("الكمية") }, { key: "unitCost", label: t("متوسط التكلفة SAR") }, { key: "cost", label: t("تكلفة الصرف SAR") }, { key: "journal", label: t("القيد المحاسبي") }],
-        rows: issueMovements.map((item) => ({ date: item.date, number: item.number, item: productName(item.productId), warehouse: warehouseName(item.warehouseId), quantity: quantity(item.quantity), unitCost: money(item.unitCost), cost: money(movementValue(item)), journal: item.journalEntryId || t("غير مطلوب") })),
+        rows: issueMovements.map((item) => ({ date: item.date, number: item.number, item: productName(item.productId), warehouse: warehouseName(item.warehouseId), quantity: quantity(item.quantity), unitCost: money(item.unitCost), cost: money(movementValue(item)), journal: entryText(item.journalEntryId, t("غير مطلوب")) })),
         summary: [{ label: t("إجمالي تكلفة الصرف"), value: money(issueMovements.reduce((sum, item) => sum + movementValue(item), 0)) }, { label: t("عدد الحركات"), value: issueMovements.length }],
       };
     }
@@ -230,10 +256,14 @@ export default function InventoryReports() {
     if (view === "manufacturing" || view === "assembly") {
       const sourceOrders = view === "manufacturing" ? manufacturingOrders : assemblyOrders;
       const periodOrders = sourceOrders.filter((order) => order.date >= dateFrom && order.date <= dateTo && matches(order.finishedProductId, order.warehouseId));
+      const postedOrders = periodOrders.filter((order) => order.status === "posted");
+      const postedQuantity = postedOrders.reduce((sum, order) => sum + order.quantity, 0);
+      const postedCost = postedOrders.reduce((sum, order) => sum + order.totalCost, 0);
       return {
-        columns: [{ key: "date", label: t("التاريخ") }, { key: "number", label: t("رقم الأمر") }, { key: "item", label: t(view === "manufacturing" ? "المنتج النهائي" : "المنتج المركب") }, { key: "warehouse", label: t("المستودع") }, { key: "quantity", label: t("الكمية") }, { key: "cost", label: t("التكلفة الفعلية SAR") }, { key: "status", label: t("حالة الأمر") }, { key: "accounting", label: t("حالة المحاسبة") }, { key: "journal", label: t("القيد المحاسبي") }],
-        rows: periodOrders.map((order) => ({ date: order.date, number: order.number, item: productName(order.finishedProductId), warehouse: warehouseName(order.warehouseId), quantity: quantity(order.quantity), cost: order.status === "posted" ? money(order.totalCost) : "—", status: statusText(order.status), accounting: statusText(order.accountingStatus), journal: order.journalEntryId || t(order.status === "posted" ? "غير مطلوب" : "لم يرحل") })),
-        summary: [{ label: t("إجمالي التكلفة المرحلة"), value: money(periodOrders.filter((order) => order.status === "posted").reduce((sum, order) => sum + order.totalCost, 0)) }, { label: t("الأوامر المرحلة"), value: periodOrders.filter((order) => order.status === "posted").length }, { label: t("المسودات"), value: periodOrders.filter((order) => order.status === "draft").length }, { label: t("إجمالي الأوامر"), value: periodOrders.length }],
+        columns: [{ key: "number", label: t("رقم الأمر") }, { key: "date", label: t("التاريخ") }, { key: "item", label: t(view === "manufacturing" ? "المنتج النهائي" : "المنتج المركب") }, { key: "warehouse", label: t("المستودع") }, { key: "quantity", label: t("الكمية") }, { key: "cost", label: t("التكلفة الفعلية SAR") }, { key: "unitCost", label: t("تكلفة الوحدة SAR") }, { key: "status", label: t("حالة الأمر") }, { key: "accounting", label: t("حالة المحاسبة") }, { key: "journal", label: t("القيد المحاسبي") }],
+        // التكلفة الفعلية تُعرف عند الترحيل فقط؛ المسودة تظهر بلا تكلفة
+        rows: periodOrders.map((order) => ({ number: order.number, date: order.date, item: productName(order.finishedProductId), warehouse: warehouseName(order.warehouseId), quantity: quantity(order.quantity), cost: order.status === "posted" ? money(order.totalCost) : "—", unitCost: order.status === "posted" && order.quantity > 0 ? money(order.totalCost / order.quantity) : "—", status: statusText(order.status), accounting: statusText(order.accountingStatus), journal: entryText(order.journalEntryId, t(order.status === "posted" ? "غير مطلوب" : "لم يرحل")) })),
+        summary: [{ label: t("إجمالي التكلفة المرحلة"), value: money(postedCost) }, { label: t("إجمالي الكمية المرحلة"), value: quantity(postedQuantity) }, { label: t("متوسط تكلفة الوحدة SAR"), value: money(postedQuantity > 0 ? postedCost / postedQuantity : 0) }, { label: t("الأوامر المرحلة"), value: postedOrders.length }, { label: t("المسودات"), value: periodOrders.filter((order) => order.status === "draft").length }, { label: t("إجمالي الأوامر"), value: periodOrders.length }],
       };
     }
 
@@ -263,7 +293,7 @@ export default function InventoryReports() {
       rows: reconciliation.map((item) => ({ account: item.account === "__unconfigured__" ? t("منتجات دون حساب مخزون") : item.account, inventory: money(item.inventoryValue), accounting: money(item.accountingValue), difference: money(item.difference), status: Math.abs(item.difference) <= 0.01 ? t("متطابق") : t("يوجد فرق") })),
       summary: [{ label: t("إجمالي دفتر المخزون"), value: money(totalInventory) }, { label: t("إجمالي الأستاذ العام"), value: money(totalAccounting) }, { label: t("صافي الفرق"), value: money(totalInventory - totalAccounting) }, { label: t("حسابات غير متطابقة"), value: reconciliation.filter((item) => Math.abs(item.difference) > 0.01).length }, { label: t("رصيد 2113 بضاعة مستلمة لم تصل فواتيرها"), value: grniSide ? `${money(Math.abs(grniBalance))} ${grniSide}` : money(0) }, { label: t("دلالة رصيد 2113"), value: grniMeaning }],
     };
-  }, [adjustmentById, adjustmentLines, assemblyOrders, countById, countLines, dateFrom, dateTo, journalLines, manufacturingOrders, movements, productById, productFilter, products, transferById, warehouseById, warehouseFilter, locale, formatNumber, t, view]);
+  }, [adjustmentById, adjustmentLines, assemblyOrders, countById, countLines, dateFrom, dateTo, journalLines, manufacturingOrders, movements, productById, productFilter, products, transferById, warehouseById, warehouseFilter, locale, formatNumber, t, view, entryNumbers]);
 
   const exportOptions = { title: t(currentReport.label), subtitle: view === "reconciliation" ? `${t("حتى تاريخ")} ${dateTo}` : `${t("من تاريخ")} ${dateFrom} ${t("إلى تاريخ")} ${dateTo}`, columns: report.columns, rows: report.rows, fileName: currentReport.label, summary: report.summary, landscape: true, brand: COMPANY_REPORT_BRAND };
 

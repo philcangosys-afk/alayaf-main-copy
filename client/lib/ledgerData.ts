@@ -14,6 +14,10 @@ export type LedgerEntry = {
   created_at: string | null;
   description: string | null;
   source_document_id: string | null;
+  /** رقم القيد المقروء (مثل 1001-JE-000007)؛ يُعطى عند الترحيل، والمسودة بلا رقم. */
+  entry_number?: string | null;
+  reference_type?: string | null;
+  source_document_table?: string | null;
 };
 export type LedgerLine = {
   id: string;
@@ -68,7 +72,7 @@ export async function fetchPostedLedger(dateTo: string) {
   const entries = await fetchAllPages<LedgerEntry>((from, to) =>
     supabase
       .from("accounting_journal_entries")
-      .select("id, entry_date, created_at, description, source_document_id")
+      .select("id, entry_date, created_at, description, source_document_id, entry_number, reference_type, source_document_table")
       .eq("status", "posted")
       .lte("entry_date", dateTo)
       .order("entry_date")
@@ -98,6 +102,89 @@ export async function fetchPostedLedger(dateTo: string) {
     credit: Number(line.credit) || 0,
   }));
   return { accounts, entries, lines };
+}
+
+/**
+ * أسماء أنواع مراجع القيود (reference_type) وجداول مصادرها (source_document_table) بالعربية،
+ * حتى لا تظهر الرموز الإنجليزية الداخلية للمستخدم. النوع غير المعروف يُعرض برمزه.
+ */
+export const JOURNAL_REFERENCE_LABELS: Record<string, string> = {
+  sales_invoice: "فاتورة مبيعات",
+  sales_invoices: "فاتورة مبيعات",
+  purchase_invoice: "فاتورة شراء",
+  purchase_invoices: "فاتورة شراء",
+  customs_declaration: "بيان جمركي",
+  customs_declarations: "بيان جمركي",
+  customs_declaration_reversal: "عكس بيان جمركي",
+  customs_declaration_reversals: "عكس بيان جمركي",
+  manual_journal: "قيد يدوي",
+  manual_journals: "قيد يدوي",
+  manual_journal_reversal: "عكس قيد يدوي",
+  manual_journal_reversals: "عكس قيد يدوي",
+  inventory_issue: "سند صرف مخزون",
+  inventory_issues: "سند صرف مخزون",
+  inventory_receipt: "سند استلام مخزون",
+  inventory_receipts: "سند استلام مخزون",
+  inventory_opening: "رصيد افتتاحي للمخزون",
+  inventory_opening_balances: "رصيد افتتاحي للمخزون",
+  inventory_adjustment: "تسوية جرد",
+  inventory_adjustments: "تسوية جرد",
+  inventory_assembly: "أمر تركيب",
+  inventory_assembly_orders: "أمر تركيب",
+  inventory_manufacturing: "أمر تصنيع",
+  inventory_manufacturing_orders: "أمر تصنيع",
+  inventory_transfer: "تحويل مخزون",
+  inventory_transfers: "تحويل مخزون",
+  fixed_asset_capitalization: "رسملة أصل ثابت",
+  fixed_assets: "رسملة أصل ثابت",
+  fixed_asset_disposal: "استبعاد أصل",
+  fixed_asset_disposals: "استبعاد أصل",
+  fixed_asset_depreciation: "إهلاك أصل",
+  sales_credit: "إشعار دائن مبيعات",
+  sales_debit: "إشعار مدين مبيعات",
+  purchase_credit: "إشعار دائن مورد",
+  purchase_debit: "إشعار مدين مورد",
+  invoice_adjustment_notes: "إشعار دائن / مدين",
+  purchase_payment: "سداد مورد",
+  purchase_payments: "سداد مورد",
+  purchase_payment_reversal: "عكس سداد مورد",
+  purchase_payment_reversals: "عكس سداد مورد",
+  purchase_cheque_clearing: "صرف شيك مورد",
+  purchase_cheque_clearings: "صرف شيك مورد",
+  customer_payment: "تحصيل عميل",
+  customer_payments: "تحصيل عميل",
+  payroll: "رواتب",
+  bulk_reclassification: "إعادة تصنيف",
+  accounting_reclassifications: "إعادة تصنيف",
+  opening_balance: "رصيد افتتاحي",
+  opening_balances: "رصيد افتتاحي",
+};
+
+/** اسم نوع المرجع بالعربية (أو بالترجمة إن مُرّرت t)؛ الرمز غير المعروف يُعاد كما هو. */
+export function journalReferenceLabel(code: string | null | undefined, t: (source: string) => string = (source) => source): string {
+  const key = String(code ?? "").trim();
+  if (!key) return "—";
+  const label = JOURNAL_REFERENCE_LABELS[key];
+  return label ? t(label) : key;
+}
+
+const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+export const containsUuid = (value: unknown) => UUID_PATTERN.test(String(value ?? ""));
+
+/**
+ * الرقم المعروض للقيد: رقم القيد (entry_number) إن وُجد، وإلا مرجع المستند المصدر إن كان مقروءًا،
+ * وإلا نوع المرجع مع مختصر قصير — ولا يُعرض المعرّف الداخلي (UUID) كاملًا أبدًا.
+ */
+export function journalEntryDisplayNumber(
+  entry: { id: string; entry_number?: string | null; source_document_id?: string | null; reference_type?: string | null },
+  t: (source: string) => string = (source) => source,
+): string {
+  const number = String(entry.entry_number ?? "").trim();
+  if (number) return number;
+  const source = String(entry.source_document_id ?? "").trim();
+  if (source && !containsUuid(source)) return source;
+  const label = entry.reference_type ? journalReferenceLabel(entry.reference_type, t) : t("قيد");
+  return `${label} #${String(entry.id ?? "").replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 }
 
 /** السنة المالية تقويمية (الفترات الشهرية من يناير إلى ديسمبر). */

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Layout from "@/components/Layout";
 import { purchasesFeatures } from "./Purchases";
+import type { PurchaseOrderInvoiceSource } from "./PurchaseOrders";
 import {
   Plus,
   Search,
@@ -26,6 +28,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { companyNumberLike, nextCompanyNumber, previewNextNumber } from "@/lib/companyNumbers";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
+import { dbErrorOr } from "@/lib/dbErrors";
 import PartyRegistrationDialog from "@/components/PartyRegistrationDialog";
 import { canManagePerm, checkPerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
@@ -124,6 +127,7 @@ type PurchaseInvoice = {
   dueDate: string;
   vendor: string;
   vendorId: string;
+  vendorTaxNumber?: string;
   poNumber: string;
   referenceNo: string;
   notes: string;
@@ -164,6 +168,7 @@ function mapRow(row: Record<string, unknown>): PurchaseInvoice {
     dueDate: (row.due_date as string) ?? "",
     vendor: (row.vendor as string) ?? "",
     vendorId: String(row.vendor_id ?? ""),
+    vendorTaxNumber: String(row.vendor_tax_number ?? ""),
     poNumber: (row.po_number as string) ?? "",
     referenceNo: (row.reference_no as string) ?? "",
     notes: (row.notes as string) ?? "",
@@ -213,12 +218,28 @@ export default function PurchaseInvoices() {
     formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const displayDate = (value: string) =>
     value ? formatDate(value, { dateStyle: "medium" }) : "-";
+  const location = useLocation();
+  const navigate = useNavigate();
+  // الوصول من أمر شراء: «تحويل إلى فاتورة» يفتح نموذج الإنشاء، ورابط الفاتورة يفتح تفاصيلها
+  const routeState = location.state as { fromPurchaseOrder?: unknown; openInvoiceId?: unknown } | null;
   const [view, setView] = useState<
     "list" | "create" | "details" | "edit" | "payment"
-  >("list");
+  >(() => (routeState?.fromPurchaseOrder ? "create" : "list"));
   const [invoices, setInvoices] = useState<PurchaseInvoice[]>([]);
   const [selected, setSelected] = useState<PurchaseInvoice | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const openInvoiceIdRef = useRef(routeState?.openInvoiceId ? String(routeState.openInvoiceId) : "");
+  useEffect(() => {
+    const target = openInvoiceIdRef.current;
+    if (!target) return;
+    const invoice = invoices.find((item) => item.id === target);
+    if (!invoice) return;
+    openInvoiceIdRef.current = "";
+    setSelected(invoice);
+    setView("details");
+    navigate(location.pathname, { replace: true, state: null });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices]);
   const { permissions } = useRolePermissions();
   const canViewIssuer = checkPerm(permissions, "audit.creator_columns");
   // فصل المهام: المشتريات تنشئ الفاتورة، والمحاسبة (إدارة الحسابات) تسدد — نفس فحص القاعدة
@@ -731,6 +752,25 @@ function InvoiceDetails({
     formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const displayDate = (value: string) =>
     value ? formatDate(value, { dateStyle: "medium" }) : "-";
+  // الرقم الضريبي للمورد: المحفوظ على الفاتورة، وإلا من بطاقة المورد
+  const [vendorTaxNumber, setVendorTaxNumber] = useState(invoice.vendorTaxNumber ?? "");
+  useEffect(() => {
+    setVendorTaxNumber(invoice.vendorTaxNumber ?? "");
+    if (invoice.vendorTaxNumber || !invoice.vendorId) return;
+    let cancelled = false;
+    const loadVendorTaxNumber = async () => {
+      const { data } = await supabase
+        .from("vendors")
+        .select("tax_number")
+        .eq("id", invoice.vendorId)
+        .maybeSingle();
+      if (!cancelled) setVendorTaxNumber(String(data?.tax_number ?? ""));
+    };
+    void loadVendorTaxNumber();
+    return () => {
+      cancelled = true;
+    };
+  }, [invoice.id, invoice.vendorId, invoice.vendorTaxNumber]);
   const items =
     invoice.items.length > 0
       ? invoice.items
@@ -838,6 +878,7 @@ function InvoiceDetails({
             {[
               { label: t("رقم الفاتورة"), value: invoice.id },
               { label: t("المورد"), value: invoice.vendor },
+              { label: t("الرقم الضريبي للمورد"), value: vendorTaxNumber || "-" },
               { label: t("تاريخ الفاتورة"), value: displayDate(invoice.date) },
               {
                 label: t("تاريخ الاستحقاق"),
@@ -845,7 +886,8 @@ function InvoiceDetails({
               },
               { label: t("رقم أمر الشراء"), value: invoice.poNumber || "-" },
               { label: t("مرجع الفاتورة"), value: invoice.referenceNo || "-" },
-              { label: t("مركز التكلفة"), value: t(invoice.costCenter) || "-" },
+              // المشروع يُحفظ في cost_center_name (كما في الطباعة)
+              { label: t("مركز التكلفة"), value: invoice.costCenterName || t(invoice.costCenter) || "-" },
               { label: t("الحالة"), value: t(invoice.status) },
             ].map(({ label, value }) => (
               <div key={label} className="space-y-1">
@@ -1566,6 +1608,31 @@ function FormFields({
   );
 }
 
+/* ── أمر شراء محوّل إلى فاتورة (حالة التنقل من شاشة أوامر الشراء) ── */
+const readPurchaseOrderSource = (state: unknown): PurchaseOrderInvoiceSource | null => {
+  const source = (state as { fromPurchaseOrder?: PurchaseOrderInvoiceSource } | null)?.fromPurchaseOrder;
+  return source && typeof source === "object" && source.id ? source : null;
+};
+
+// البنود بسعر الأمر وحساب المشتريات الافتراضي 511؛ حساب 2113 يُحدَّد بعد فحص سندات الاستلام
+const purchaseOrderInitial = (source: PurchaseOrderInvoiceSource): Partial<PurchaseInvoice> => ({
+  vendor: source.vendor ?? "",
+  vendorId: source.vendorId ?? "",
+  poNumber: source.referenceNo ?? "",
+  costCenter: source.costCenter || "بدون مركز تكلفة",
+  costCenterName: source.costCenterName ?? "",
+  items: (source.items ?? []).map((item, index) => ({
+    id: index + 1,
+    description: String(item.description ?? ""),
+    unit: String(item.unit ?? ""),
+    accountCode: "511",
+    quantity: Number(item.quantity) || 0,
+    unitPrice: Number(item.price) || 0,
+    discount: Number(item.discount) || 0,
+    taxPercent: Number(item.taxPercent) === SAUDI_STANDARD_VAT_RATE ? SAUDI_STANDARD_VAT_RATE : 0,
+  })),
+});
+
 /* ── Create Form ── */
 function InvoiceForm({
   onBack,
@@ -1575,6 +1642,10 @@ function InvoiceForm({
   onSaved: (i: PurchaseInvoice) => void;
 }) {
   const { t, direction } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // يُقرأ مرة واحدة عند فتح النموذج، ثم تُمسح حالة التنقل حتى لا تتكرر التعبئة عند العودة أو التحديث
+  const [fromOrder] = useState(() => readPurchaseOrderSource(location.state));
   const {
     form,
     setField,
@@ -1585,7 +1656,54 @@ function InvoiceForm({
     addItem,
     updateItem,
     removeItem,
-  } = useInvoiceForm();
+  } = useInvoiceForm(fromOrder ? purchaseOrderInitial(fromOrder) : undefined);
+  // حساب البضاعة المستلمة غير المفوترة الذي وُجّهت إليه بنود الأصناف المستلمة (للتنبيه)
+  const [grniAccount, setGrniAccount] = useState("");
+  useEffect(() => {
+    if (!fromOrder) return;
+    navigate(location.pathname, { replace: true, state: null });
+    const productLines = (fromOrder.items ?? [])
+      .map((item, index) => (item.productId ? { id: index + 1, productId: String(item.productId) } : null))
+      .filter((line): line is { id: number; productId: string } => line !== null);
+    if (productLines.length === 0) return;
+    let cancelled = false;
+    const applyGrniAccount = async () => {
+      // سند استلام مرحّل لهذا الأمر: purchase_order_id نص يُدخل فيه رقم الأمر (أو معرّفه)
+      const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
+      const reference = String(fromOrder.referenceNo ?? "").trim();
+      const lookups = await Promise.all([
+        supabase.from("inventory_receipts").select("id").eq("status", "posted").eq("purchase_order_id", fromOrder.id),
+        reference
+          ? supabase.from("inventory_receipts").select("id").eq("status", "posted").ilike("purchase_order_id", escapeLike(reference))
+          : Promise.resolve({ data: [] as { id: string }[], error: null }),
+      ]);
+      const receiptIds = Array.from(
+        new Set(lookups.flatMap((result) => (result.error ? [] : ((result.data ?? []) as { id: unknown }[]).map((row) => String(row.id))))),
+      );
+      if (cancelled || receiptIds.length === 0) return;
+      // الأصناف المستلمة فعلًا في تلك السندات؛ إن تعذرت قراءتها تُعامل بنود الأصناف كلها كمستلمة
+      const { data: lines, error: linesError } = await supabase
+        .from("inventory_receipt_lines")
+        .select("product_id")
+        .in("receipt_id", receiptIds);
+      const received = linesError ? null : new Set(((lines ?? []) as { product_id: unknown }[]).map((line) => String(line.product_id)));
+      const { data: rule } = await supabase
+        .from("accounting_posting_rules")
+        .select("grni_account_code")
+        .eq("rule_code", "sales_default")
+        .maybeSingle();
+      const grni = String(rule?.grni_account_code ?? "").trim() || "2113";
+      const targets = productLines.filter((line) => !received || received.has(line.productId));
+      if (cancelled || targets.length === 0) return;
+      targets.forEach((line) => updateItem(line.id, { accountCode: grni }));
+      setGrniAccount(grni);
+    };
+    void applyGrniAccount();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // المورد غير المقيم بعملة أجنبية: البنود تُدخل بعملته وتُرسل للقاعدة بالريال
   const isForeign = importInfo.nonResident && importInfo.currency !== "SAR";
   // سعر الصرف بست خانات كما يُحفظ في القاعدة، فيطابق التحويل هنا ما تتحقق منه
@@ -1633,6 +1751,11 @@ function InvoiceForm({
     }
     if (!form.vendorId || !form.vendor.trim()) {
       setError(t("يرجى اختيار المورد قبل حفظ الفاتورة"));
+      return;
+    }
+    // فاتورة أمر الشراء لمورد الأمر نفسه؛ أمر قديم بلا مورد مسجل يُختار له المورد يدويًا
+    if (fromOrder?.vendorId && form.vendorId !== fromOrder.vendorId) {
+      setError(t("مورد الفاتورة يجب أن يطابق مورد أمر الشراء. لفوترة مورد آخر أنشئ فاتورة مستقلة بدون أمر الشراء"));
       return;
     }
     if (items.length === 0 || items.some((item) => !item.description.trim() || !item.accountCode || item.quantity <= 0 || item.unitPrice < 0 || item.discount < 0 || item.discount > item.quantity * item.unitPrice)) {
@@ -1694,6 +1817,42 @@ function InvoiceForm({
     setError(null);
 
     try {
+      // أمر الشراء لا يُحوَّل مرتين: يُتأكد أنه ما زال مفتوحًا وغير مربوط بفاتورة
+      if (fromOrder) {
+        const { data: orderRow } = await supabase
+          .from("purchase_orders")
+          .select("invoice_id, status")
+          .eq("id", fromOrder.id)
+          .maybeSingle();
+        if (orderRow && (orderRow.invoice_id || orderRow.status !== "مفتوح")) {
+          setError(
+            orderRow.invoice_id
+              ? `${t("أمر الشراء هذا محوّل إلى فاتورة مسبقًا")}: ${orderRow.invoice_id}`
+              : t("أمر الشراء مغلق ولا يمكن تحويله إلى فاتورة"),
+          );
+          return;
+        }
+        // فاتورة مسجلة مسبقًا برقم هذا الأمر (ولو لم يُربط الأمر بها) تمنع تسجيله مرة ثانية
+        const orderReference = String(fromOrder.referenceNo ?? "").trim();
+        if (orderReference) {
+          const { data: orderInvoices, error: orderInvoicesError } = await supabase
+            .from("purchase_invoices")
+            .select("id")
+            .eq("po_number", orderReference)
+            .limit(1);
+          if (orderInvoicesError) {
+            setError(`${t("تعذّر التحقق من فواتير أمر الشراء")}: ${dbErrorOr(String(orderInvoicesError.message ?? ""))}`);
+            return;
+          }
+          const orderInvoice = orderInvoices?.[0] as { id?: unknown } | undefined;
+          if (orderInvoice) {
+            setError(
+              `${t("توجد فاتورة مشتريات مسجلة لأمر الشراء هذا مسبقًا")}: ${String(orderInvoice.id ?? "")}. ${t("لا يُحوَّل أمر الشراء إلى فاتورة مرتين")}`,
+            );
+            return;
+          }
+        }
+      }
       const normalizeRef = (value: unknown) =>
         String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
       const { data: vendorInvoices, error: duplicateError } = await supabase
@@ -1776,6 +1935,22 @@ function InvoiceForm({
         return;
       }
 
+      // الفاتورة محفوظة: يُربط أمر الشراء بها ويُغلق. فشل الربط لا يلغي الفاتورة، ويظهر تنبيه
+      let orderLinkWarning: string | null = null;
+      if (fromOrder) {
+        const { data: linked, error: linkError } = await supabase
+          .from("purchase_orders")
+          .update({ invoice_id: savedId, status: "مغلق" })
+          .eq("id", fromOrder.id)
+          .is("invoice_id", null)
+          .select("id");
+        if (linkError || !linked || linked.length === 0) {
+          orderLinkWarning = linkError
+            ? dbErrorOr(String(linkError.message ?? ""))
+            : t("لم يُحدَّث أمر الشراء: حُذف أو رُبط بفاتورة أخرى أو لا تملك صلاحية تعديل أوامر الشراء. راجع الأمر وأغلقه يدويًا");
+        }
+      }
+
       const { vendorVat: _vendorVat, ...savedFields } = form;
       onSaved({
         id: savedId,
@@ -1795,6 +1970,21 @@ function InvoiceForm({
         exchangeRate: isForeign ? exchangeRate : 0,
         supplierCurrencyTotal: isForeign ? foreignTotal : 0,
       });
+      // يظهر بعد تنبيه الحفظ العام (تنبيه واحد في كل مرة)
+      if (fromOrder) {
+        toast(
+          orderLinkWarning
+            ? {
+                title: t("حُفظت الفاتورة لكن تعذّر إغلاق أمر الشراء وربطه بها"),
+                description: `${t("الفاتورة")}: ${savedId} — ${t("أمر الشراء")}: ${fromOrder.referenceNo || "-"} — ${orderLinkWarning}`,
+                variant: "destructive",
+              }
+            : {
+                title: t("تم حفظ الفاتورة وإغلاق أمر الشراء"),
+                description: `${t("الفاتورة")}: ${savedId} — ${t("أمر الشراء")}: ${fromOrder.referenceNo || "-"}`,
+              },
+        );
+      }
     } catch (saveError) {
       setError(
         saveError instanceof Error
@@ -1832,6 +2022,26 @@ function InvoiceForm({
       {error && (
         <div className="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm text-right">
           {error}
+        </div>
+      )}
+
+      {fromOrder && (
+        <div className="p-3 bg-indigo-50 border border-indigo-200 rounded text-indigo-900 text-sm text-right space-y-1">
+          <p className="font-semibold">
+            {t("فاتورة من أمر الشراء")} {fromOrder.referenceNo || "-"}
+          </p>
+          <p>{t("بعد حفظ الفاتورة يُغلق أمر الشراء ويُربط بها. أدخل رقم فاتورة المورد وراجع البنود قبل الحفظ.")}</p>
+          {grniAccount && (
+            <p>
+              {t("بنود الأصناف المستلمة بسند استلام مرحّل وُجّهت إلى حساب البضاعة المستلمة غير المفوترة")} ({grniAccount})
+            </p>
+          )}
+          {!fromOrder.vendorId && (
+            <p className="text-amber-700">
+              {t("أمر الشراء غير مربوط بمورد مسجل: اختر المورد قبل الحفظ")}
+              {fromOrder.vendor ? ` — ${fromOrder.vendor}` : ""}
+            </p>
+          )}
         </div>
       )}
 

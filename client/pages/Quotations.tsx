@@ -28,6 +28,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { companyNumberLike, nextCompanyNumber, previewNextNumber } from "@/lib/companyNumbers";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
+import { dbErrorText } from "@/lib/dbErrors";
 
 type QuotationItem = {
   id: number;
@@ -37,6 +38,14 @@ type QuotationItem = {
   unitPrice: number;
   discount: number;
   taxPercent: number;
+};
+
+// بيانات العميل اللازمة لتعبئة الرقم الضريبي والعنوان في العرض
+type CustomerRecord = {
+  id: string;
+  name: string;
+  vatNumber: string;
+  address: string;
 };
 
 type Totals = {
@@ -82,6 +91,17 @@ const companyInfo = () => ({
 
 const toNum = (v: unknown) => Number(v) || 0;
 
+// العنوان الوطني بنفس تنسيق شاشة الفواتير: رقم المبنى والشارع، الحي، المدينة، الرمز البريدي
+const formatNationalAddress = (row: Record<string, unknown>) =>
+  [
+    `${String(row.building_number ?? "").trim()} ${String(row.street ?? "").trim()}`.trim(),
+    String(row.district ?? "").trim(),
+    String(row.city ?? "").trim(),
+    String(row.postal_code ?? "").trim(),
+  ]
+    .filter(Boolean)
+    .join("، ");
+
 const INPUT_CLASS =
   "w-full h-10 rounded-lg border border-slate-300 bg-white px-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
 
@@ -116,7 +136,8 @@ function calculateTotals(items: QuotationItem[]): Totals {
 function createDefaultItem(id = 1): QuotationItem {
   return {
     id,
-    itemLabel: "توريد عمالة",
+    // بند فارغ افتراضيًا (لا نص ثابت من بيانات منشأة سابقة)
+    itemLabel: "",
     description: "",
     quantity: 1,
     unitPrice: 0,
@@ -135,7 +156,7 @@ function mapRow(row: Record<string, unknown>): QuotationRow {
     itemsRaw.length > 0
       ? itemsRaw.map((it, idx) => ({
           id: Number(it.id) || idx + 1,
-          itemLabel: String(it.itemLabel ?? "توريد عمالة"),
+          itemLabel: String(it.itemLabel ?? ""),
           description: String(it.description ?? ""),
           quantity: toNum(it.quantity),
           unitPrice: toNum(it.unitPrice),
@@ -205,7 +226,10 @@ export default function Quotations() {
         description: `${t("العرض")}: ${quotationId}`,
       });
     } else {
-      toast({ title: t("تعذر حذف عرض السعر"), description: error.message });
+      toast({
+        title: t("تعذر حذف عرض السعر"),
+        description: t(dbErrorText(error.message) ?? error.message),
+      });
     }
   };
 
@@ -258,6 +282,7 @@ export default function Quotations() {
             .totals div{display:flex;justify-content:space-between;border-bottom:1px solid #d1d5db;padding:5px 7px}
             .totals div:last-child{background:#eff6ff;border:1px solid #93c5fd;font-weight:700;font-size:13px}
             .bank{margin-top:18px;padding-top:10px;border-top:1px solid #cbd5e1;font-size:11px;line-height:1.8}
+            .notes{white-space:pre-wrap;margin-bottom:8px}
             @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
           </style>
         </head>
@@ -313,6 +338,7 @@ export default function Quotations() {
             <div class="bank">
               <div>
                 <strong>${t("ملاحظة")}</strong><br/>
+                <div class="notes">${escapeHtml(quotation.notes || "-")}</div>
                 <strong>${t("البيانات البنكية")}</strong><br/>
                 *${t("اسم البنك")}: ${escapeHtml(t(companyInfo().bankName))}<br/>
                 *${t("اسم المستفيد")}: ${escapeHtml(t(companyInfo().beneficiary))}<br/>
@@ -581,7 +607,7 @@ function QuotationEditor({
   const [items, setItems] = useState<QuotationItem[]>(
     initialData?.items?.length ? initialData.items : [createDefaultItem(1)],
   );
-  const [customers, setCustomers] = useState<string[]>([]);
+  const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -603,18 +629,37 @@ function QuotationEditor({
 
       const { data: customerRows } = await supabase
         .from("customers")
-        .select("name")
+        .select(
+          "id, name, tax_number, building_number, street, district, city, postal_code",
+        )
+        .eq("status", "نشط")
         .order("name");
-      const names = (customerRows ?? [])
-        .map((r) => String(r.name ?? ""))
-        .filter(Boolean);
-      setCustomers(names);
+      setCustomers(
+        (customerRows ?? [])
+          .map((r: Record<string, unknown>) => ({
+            id: String(r.id ?? ""),
+            name: String(r.name ?? "").trim(),
+            vatNumber: String(r.tax_number ?? "").trim(),
+            address: formatNationalAddress(r),
+          }))
+          .filter((r) => r.name),
+      );
     };
 
     loadDefaults();
   }, [initialData]);
 
   const totals = useMemo(() => calculateTotals(items), [items]);
+
+  // اختيار عميل من القائمة يعبئ رقمه الضريبي وعنوانه من سجله (ويبقيان قابلين للتعديل)
+  const chooseCustomer = (name: string) => {
+    setCustomer(name);
+    const record = customers.find((row) => row.name === name);
+    if (record) {
+      setCustomerVat(record.vatNumber);
+      setCustomerAddress(record.address);
+    }
+  };
 
   const updateItem = (id: number, changes: Partial<QuotationItem>) => {
     setItems((prev) =>
@@ -702,7 +747,9 @@ function QuotationEditor({
     if (error || !data) {
       toast({
         title: t("تعذر حفظ عرض السعر"),
-        description: error?.message ?? t("حدث خطأ غير متوقع"),
+        description: error?.message
+          ? t(dbErrorText(error.message) ?? error.message)
+          : t("حدث خطأ غير متوقع"),
       });
       return;
     }
@@ -783,14 +830,14 @@ function QuotationEditor({
             <Field label={t("العميل")}>
               <div className="space-y-2">
                 <select
-                  value={customer}
-                  onChange={(e) => setCustomer(e.target.value)}
+                  value={customers.some((row) => row.name === customer) ? customer : ""}
+                  onChange={(e) => chooseCustomer(e.target.value)}
                   className={INPUT_CLASS}
                 >
                   <option value="">{t("اختر العميل")}</option>
-                  {customers.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
+                  {customers.map((row) => (
+                    <option key={row.id || row.name} value={row.name}>
+                      {row.name}
                     </option>
                   ))}
                 </select>

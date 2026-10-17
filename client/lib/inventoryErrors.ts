@@ -2,9 +2,11 @@
  * ترجمة رموز أخطاء إجراءات المخزون (RPC) إلى رسائل عربية مفهومة.
  * المطابقة بجزء من النص لأن رسالة قاعدة البيانات قد تحمل تفاصيل بعد الرمز
  * (مثل: INVENTORY_ISSUE_INSUFFICIENT_STOCK: product=ITM-000001, available=3, requested=5).
- * إن لم يُعرف الرمز تُعاد الرسالة الأصلية كما هي.
+ * إن لم يُعرف الرمز تُعاد رسالة الأخطاء العامة (التكرار، الارتباط، الصلاحية) أو الرسالة الأصلية كما هي.
  * المعامل t اختياري لترجمة الجمل عند اختيار اللغة الإنجليزية.
  */
+import { dbErrorText } from "@/lib/dbErrors";
+
 type Translate = (source: string) => string;
 
 const keepSource: Translate = (source) => source;
@@ -31,12 +33,15 @@ export function inventoryErrorText(message: string, t: Translate = keepSource): 
   }
 
   if (/[A-Z]+_DATE_INVALID/.test(raw)) {
-    return t("التاريخ غير صالح: لا يمكن أن يكون تاريخ المستند في المستقبل. ملاحظة: الخادم يعتمد توقيت UTC، لذلك بين الساعة 00:00 و03:00 بتوقيت الرياض اختر تاريخ الأمس.");
+    return t("التاريخ غير صالح: لا يمكن أن يكون تاريخ المستند في المستقبل.");
   }
 
   if (has("INVENTORY_ISSUE_SALES_INVOICE_NOT_POSTED")) return t("لا يمكن ربط إشعار التسليم إلا بفاتورة مبيعات مرحّلة. رحّل الفاتورة أولًا أو احفظ الإشعار دون ربط.");
   if (has("INVENTORY_DELIVERY_CUSTOMER_REQUIRED")) return t("إشعار التسليم يتطلب تحديد العميل.");
   if (has("INVENTORY_ISSUE_INVOICE_CUSTOMER_MISMATCH")) return t("فاتورة المبيعات المختارة تخص عميلًا آخر غير العميل المحدد في السند.");
+  // حساب المصروف في سند الصرف الداخلي (إشعار التسليم للعميل يبقى على تكلفة المبيعات)
+  if (has("INVENTORY_ISSUE_EXPENSE_ACCOUNT_CLASS_INVALID")) return t("حساب المصروف غير صالح: اختر حساب مصروف طرفيًا يبدأ رمزه بالرقم 5.");
+  if (has("INVENTORY_DELIVERY_EXPENSE_ACCOUNT_NOT_ALLOWED")) return t("إشعار التسليم للعميل لا يقبل حساب مصروف؛ تُحمَّل تكلفته على حساب تكلفة المبيعات للصنف.");
   if (has("INVENTORY_GRNI_ACCOUNT_REQUIRED")) return t("الحساب 2113 «بضاعة مستلمة لم تصل فواتيرها» غير موجود أو غير نشط في دليل الحسابات. أضفه قبل ترحيل سند الاستلام.");
 
   if (has("INVENTORY_OPENING_REQUIRES_EMPTY_STOCK_LEDGER")) {
@@ -44,9 +49,19 @@ export function inventoryErrorText(message: string, t: Translate = keepSource): 
     return `${t("لا يمكن إدخال رصيد افتتاحي لصنف ومستودع توجد لهما حركات مخزون سابقة.")}${product ? ` (${t("الصنف")}: ${product})` : ""}`;
   }
 
-  if (has("INVENTORY_COUNT_STALE_SNAPSHOT")) return t("حدثت حركات مخزون على المستودع بعد تثبيت رصيد الجرد، فلم يعد الرصيد الدفتري صالحًا. احذف مسودة الجرد وابدأ جردًا جديدًا.");
+  if (has("INVENTORY_COUNT_STALE_SNAPSHOT")) return t("حدثت حركة مخزون على المستودع بعد بدء الجرد وتثبيت رصيده، فلم يعد الرصيد الدفتري صالحًا. احذف مسودة الجرد وابدأ جردًا جديدًا.");
   if (has("INVENTORY_PRODUCT_POSTING_CLASS_IMMUTABLE")) return t("لا يمكن تغيير نوع الصنف أو وحدته أو حساب المخزون أو حساب التكلفة بعد تسجيل حركات مخزون عليه.");
   if (has("INVENTORY_PRODUCT_SKU_INVALID")) return t("رمز الصنف غير صالح: استخدم أحرفًا إنجليزية كبيرة وأرقامًا والرموز . _ - فقط، أو اتركه فارغًا ليُنشأ تلقائيًا.");
+  if (has("INVENTORY_PRODUCT_HAS_MOVEMENTS")) return t("لا يمكن حذف صنف لديه حركات مخزون. أوقفه بإلغاء خيار «نشط» بدلًا من الحذف.");
+  if (has("INVENTORY_WAREHOUSE_CODE_INVALID")) return t("رمز المستودع غير صالح: استخدم أحرفًا إنجليزية كبيرة وأرقامًا والرموز . _ - فقط.");
+  if (has("INVENTORY_WAREHOUSE_HAS_MOVEMENTS")) return t("لا يمكن حذف مستودع لديه حركات مخزون. أوقفه بإلغاء خيار «نشط» بدلًا من الحذف.");
+
+  // الإشعار الدائن من المورد ببنود مخزنية (مرتجع بضاعة للمورد)
+  if (has("PURCHASE_CREDIT_NOTE_PRODUCT_INVALID")) return t("صنف البند المخزني غير صالح: اختر منتجًا مخزنيًا نشطًا.");
+  if (has("PURCHASE_CREDIT_NOTE_WAREHOUSE_INVALID")) return t("مستودع البند المخزني غير صالح: اختر مستودعًا نشطًا تُصرف منه الكمية المرتجعة.");
+  if (has("PURCHASE_CREDIT_NOTE_DUPLICATE_PRODUCT")) return t("الصنف مكرر في الإشعار: اجمع كميته في بند واحد.");
+  if (has("PURCHASE_CREDIT_NOTE_STOCK_LINE_INVALID")) return t("بيانات البند المخزني غير مكتملة: حدّد الصنف والمستودع وكمية أكبر من صفر.");
+  if (has("PURCHASE_CREDIT_NOTE_STOCK_LINE_AMOUNT_REQUIRED")) return t("قيمة البند المخزني يجب أن تكون أكبر من صفر بعد الخصم.");
 
   if (/[A-Z]+_DUPLICATE_PRODUCT/.test(raw)) return t("لا يمكن تكرار الصنف نفسه في أكثر من سطر؛ اجمع الكمية في سطر واحد.");
   if (/[A-Z]+_LINES_REQUIRED/.test(raw)) return t("أضف سطرًا واحدًا على الأقل إلى المستند.");
@@ -56,6 +71,13 @@ export function inventoryErrorText(message: string, t: Translate = keepSource): 
   const periodSuffix = periodDate ? ` (${periodDate})` : "";
   if (has("ACCOUNTING_FISCAL_PERIOD_CLOSED")) return `${t("الفترة المالية لهذا التاريخ مقفلة ولا يمكن الترحيل فيها. اختر تاريخًا في فترة مفتوحة أو تواصل مع المحاسب.")}${periodSuffix}`;
   if (has("ACCOUNTING_FISCAL_PERIOD_REQUIRED")) return `${t("لا توجد فترة مالية مفتوحة تغطي هذا التاريخ. أنشئ الفترة المالية من إعدادات المحاسبة أولًا.")}${periodSuffix}`;
+
+  if (/INVENTORY_[A-Z_]*PRODUCT_INVALID/.test(raw)) return t("الصنف غير صالح: اختر منتجًا مخزنيًا نشطًا.");
+  if (/INVENTORY_[A-Z_]*WAREHOUSE_INVALID/.test(raw)) return t("المستودع غير صالح: اختر مستودعًا نشطًا.");
+
+  // أخطاء القاعدة العامة: تكرار رمز المستودع أو الصنف، الارتباط، الصلاحية، الاتصال
+  const generic = dbErrorText(raw);
+  if (generic) return t(generic);
 
   return raw;
 }

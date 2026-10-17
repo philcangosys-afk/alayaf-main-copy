@@ -22,6 +22,8 @@ import { readUserSession } from "@/lib/authSession";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";
 import { hrRequestErrorText } from "@/lib/hrErrors";
+import { riyadhDateString } from "@/lib/utils";
+import { dbErrorOr } from "@/lib/dbErrors";
 
 type Panel =
   | "contact"
@@ -211,7 +213,7 @@ export default function QuickActionsBar() {
       p_whatsapp: contacts.whatsapp,
     });
     setContactSaving(false);
-    if (error) return toast.error(error.message);
+    if (error) return toast.error(t(dbErrorOr(error.message)));
     toast.success(t("تم حفظ بيانات الاتصال"));
   };
 
@@ -232,8 +234,8 @@ export default function QuickActionsBar() {
         emp_id: session.empId,
         emp_name: session.name,
         request_type: "تواصل مع الإدارة",
-        start_date: new Date().toISOString().slice(0, 10),
-        end_date: new Date().toISOString().slice(0, 10),
+        start_date: riyadhDateString(),
+        end_date: riyadhDateString(),
         status: "معلق",
         details: { subject: subject.trim(), message: message.trim() },
         signature_data: signature.signatureData,

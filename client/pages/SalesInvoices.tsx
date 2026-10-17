@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Layout from "@/components/Layout";
 import { salesFeatures } from "./Sales";
 import {
@@ -410,6 +411,12 @@ const invoiceTranslations: Record<string, string> = {
     "The company VAT number is not registered; sales invoices cannot be issued until the platform admin adds it",
   "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر فواتير المبيعات حتى تضيفه إدارة المنصة (حدّث الصفحة بعد إضافته). لم تُحفظ الفاتورة":
     "The company VAT number is not registered; sales invoices cannot be issued until the platform admin adds it (refresh the page afterwards). The invoice was not saved",
+  "تعذر تحميل أمر البيع": "Could not load the sales order",
+  "أدخل بيانات الفاتورة يدويًا": "Enter the invoice details manually",
+  "أمر البيع مفوتر مسبقًا": "The sales order has already been invoiced",
+  "عميل أمر البيع غير موجود في العملاء النشطين": "The sales order customer is not among the active customers",
+  "تعذر ربط أمر البيع بالفاتورة": "Could not link the sales order to the invoice",
+  "الفاتورة محفوظة؛ حدّث حالة أمر البيع لاحقًا": "The invoice is saved; update the sales order status later",
 };
 
 function useSalesInvoicesI18n() {
@@ -567,9 +574,11 @@ type Invoice = {
 export default function SalesInvoices() {
   const { t, locale, direction, formatDate, formatNumber } =
     useSalesInvoicesI18n();
+  // تحويل أمر بيع إلى فاتورة: يُفتح نموذج الإنشاء مباشرة ليُعبأ من الأمر
+  const location = useLocation();
   const [view, setView] = useState<
     "list" | "create" | "details" | "edit" | "payment"
-  >("list");
+  >(() => (readSalesOrderInvoiceSource(location.state) ? "create" : "list"));
   const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const { permissions } = useRolePermissions();
@@ -2289,6 +2298,48 @@ function InvoicePayment({
   const [amount, setAmount] = useState(remainingValue.toFixed(2));
   const [paymentMethod, setPaymentMethod] = useState("تحويل بنكي");
   const [paymentReference, setPaymentReference] = useState("");
+  // حساب الإيداع: صندوق للنقدي، وحساب بنكي للتحويل والبطاقة؛ الشيك إلى «شيكات تحت التحصيل»
+  const [depositAccounts, setDepositAccounts] = useState<
+    Array<{ code: string; name: string; kind: "bank" | "cash" }>
+  >([]);
+  const [depositAccount, setDepositAccount] = useState("");
+  const depositKind: "bank" | "cash" | null =
+    paymentMethod === "شيك" ? null : paymentMethod === "نقدي" ? "cash" : "bank";
+  const depositOptions = depositAccounts.filter(
+    (account) => account.kind === depositKind,
+  );
+  useEffect(() => {
+    const loadDepositAccounts = async () => {
+      // الصناديق والبنوك الفعالة لمن يسجّل سندات القبض (دالة خادم لا تتطلب صلاحية المحاسبة)؛
+      // إن تعذّر التحميل تبقى القائمة فارغة ويختار الخادم الحساب الوحيد
+      const { data } = await supabase.rpc(
+        "list_customer_payment_deposit_accounts",
+      );
+      setDepositAccounts(
+        (data ?? []).map((row: any) => ({
+          code: String(row.account_code),
+          name: String(row.name ?? ""),
+          kind: row.account_kind === "cash" ? "cash" : "bank",
+        })),
+      );
+    };
+    void loadDepositAccounts();
+  }, []);
+  useEffect(() => {
+    // الاختيار الافتراضي: الخزينة 1111 للنقدي، والحساب البنكي إن كان واحدًا فقط
+    if (depositKind === null) {
+      setDepositAccount("");
+      return;
+    }
+    setDepositAccount((current) => {
+      if (depositOptions.some((account) => account.code === current)) return current;
+      if (depositKind === "cash") {
+        return (depositOptions.find((account) => account.code === "1111") ?? depositOptions[0])?.code ?? "";
+      }
+      return depositOptions.length === 1 ? depositOptions[0].code : "";
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [depositKind, depositAccounts]);
   // يمنع تسجيل سند قبض مكرر عند النقر أكثر من مرة أثناء التنفيذ
   const paymentInFlight = useRef(false);
   const [savingPayment, setSavingPayment] = useState(false);
@@ -2304,6 +2355,18 @@ function InvoicePayment({
       });
       return;
     }
+    if (depositKind !== null && depositOptions.length > 1 && !depositAccount) {
+      toast({
+        title: t("اختر حساب الإيداع"),
+        description: t(
+          depositKind === "cash"
+            ? "اختر الصندوق الذي استُلم فيه المبلغ"
+            : "اختر الحساب البنكي الذي أُودع فيه المبلغ",
+        ),
+        variant: "destructive",
+      });
+      return;
+    }
 
     paymentInFlight.current = true;
     setSavingPayment(true);
@@ -2315,6 +2378,8 @@ function InvoicePayment({
         p_amount: paymentAmount,
         p_payment_method: paymentMethod,
         p_reference: paymentReference.trim() || null,
+        p_deposit_account_code:
+          depositKind !== null && depositAccount ? depositAccount : null,
       });
       data = response.data;
       error = response.error;
@@ -2343,9 +2408,16 @@ function InvoicePayment({
       });
       onBack();
     } else {
+      const message = String(error?.message ?? "");
+      const depositErrors: Array<[string, string]> = [
+        ["CUSTOMER_PAYMENT_DEPOSIT_ACCOUNT_REQUIRED", "اختر الحساب البنكي أو الصندوق الذي أُودع فيه المبلغ. إن لم يوجد حساب بنكي فأضفه من صفحة الحسابات البنكية."],
+        ["CUSTOMER_PAYMENT_DEPOSIT_ACCOUNT_INVALID", "حساب الإيداع غير موجود أو موقوف."],
+        ["CUSTOMER_PAYMENT_DEPOSIT_ACCOUNT_KIND_MISMATCH", "النقدي يُودع في صندوق، والتحويل والبطاقة في حساب بنكي."],
+      ];
+      const known = depositErrors.find(([code]) => message.includes(code));
       toast({
         title: t("تعذر تسديد الفاتورة"),
-        description: String(error?.message ?? t("يرجى المحاولة لاحقاً")),
+        description: known ? t(known[1]) : message || t("يرجى المحاولة لاحقاً"),
         variant: "destructive",
       });
     }
@@ -2427,6 +2499,30 @@ function InvoicePayment({
                 <option value="شيك">{t("شيك")}</option>
               </select>
             </div>
+            {depositKind !== null && depositOptions.length > 0 && (
+              <div className="space-y-1">
+                <label className="text-[12px] font-semibold text-muted-foreground block text-start">
+                  {t(depositKind === "cash" ? "الصندوق" : "الحساب البنكي")}
+                </label>
+                <select
+                  value={depositAccount}
+                  onChange={(event) => setDepositAccount(event.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded text-sm text-start focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none bg-white"
+                >
+                  {depositOptions.length > 1 && <option value="">{t("اختر")}</option>}
+                  {depositOptions.map((account) => (
+                    <option key={account.code} value={account.code}>
+                      {account.code} — {account.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {depositKind === "bank" && depositAccounts.length > 0 && depositOptions.length === 0 && (
+              <div className="space-y-1 text-xs text-amber-700 self-end">
+                {t("لا يوجد حساب بنكي فعال؛ أضفه من صفحة الحسابات البنكية")}
+              </div>
+            )}
             <div className="space-y-1 md:col-span-2">
               <label className="text-[12px] font-semibold text-muted-foreground block text-start">
                 {t("مرجع السداد")}
@@ -2444,6 +2540,43 @@ function InvoicePayment({
     </div>
   );
 }
+
+// تحويل أمر بيع إلى فاتورة: بيانات الأمر كما ترسلها شاشة أوامر البيع في حالة التنقل
+type SalesOrderInvoiceSource = {
+  id: string;
+  customerId: string;
+  customer: string;
+  items: Array<{
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    discount: number;
+  }>;
+};
+
+const readSalesOrderInvoiceSource = (
+  state: unknown,
+): SalesOrderInvoiceSource | null => {
+  const source = (state as { fromSalesOrder?: Record<string, unknown> } | null)
+    ?.fromSalesOrder;
+  if (!source || typeof source !== "object" || !source.id) return null;
+  const items = Array.isArray(source.items)
+    ? (source.items as Record<string, unknown>[])
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          description: String(item.description ?? ""),
+          quantity: Number(item.quantity) || 0,
+          unitPrice: Number(item.unitPrice) || 0,
+          discount: Number(item.discount) || 0,
+        }))
+    : [];
+  return {
+    id: String(source.id),
+    customerId: String(source.customerId ?? ""),
+    customer: String(source.customer ?? ""),
+    items,
+  };
+};
 
 function InvoiceForm({
   onBack,
@@ -2490,6 +2623,20 @@ function InvoiceForm({
   const saveInFlight = useRef(false);
   // معرّف طلب ثابت لهذا النموذج حتى ينجح الحفظ: إعادة الحفظ بعد انقطاع الاتصال لا تنشئ فاتورة ثانية
   const requestIdRef = useRef<string>(crypto.randomUUID());
+  // تحويل أمر بيع إلى فاتورة: بيانات الأمر تُقرأ مرة واحدة عند فتح النموذج
+  const location = useLocation();
+  const navigate = useNavigate();
+  const salesOrderSourceRef = useRef<SalesOrderInvoiceSource | null>(
+    readSalesOrderInvoiceSource(location.state),
+  );
+  // أمر البيع الذي يُربط بالفاتورة بعد حفظها (بعد التأكد أنه غير مفوتر)
+  const linkedSalesOrderIdRef = useRef("");
+  // عميل أمر البيع: الفاتورة المحوّلة تكون لنفس العميل
+  const linkedSalesOrderCustomerRef = useRef<{ id: string; name: string } | null>(null);
+  const [pendingOrderCustomer, setPendingOrderCustomer] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   useEffect(() => {
     const loadDefaults = async () => {
@@ -2599,6 +2746,108 @@ function InvoiceForm({
       });
     }
     setCustomerSelectorOpen(false);
+  };
+
+  // تعبئة النموذج من أمر البيع: البنود فورًا، والعميل بنفس مسار اختياره يدويًا بعد تحميل العملاء
+  useEffect(() => {
+    const source = salesOrderSourceRef.current;
+    if (!source) return;
+    // تُمسح من سجل التصفح حتى لا يُعبأ نموذج جديد من نفس الأمر مرة أخرى
+    navigate(`${location.pathname}${location.search}`, {
+      replace: true,
+      state: null,
+    });
+    let cancelled = false;
+    const loadSalesOrder = async () => {
+      const { data: orderRow, error: orderError } = await supabase
+        .from("sales_orders")
+        .select("id, invoice_id")
+        .eq("id", source.id)
+        .maybeSingle();
+      if (cancelled) return;
+      if (orderError || !orderRow) {
+        toast({
+          title: t("تعذر تحميل أمر البيع"),
+          description: `${source.id} — ${t("أدخل بيانات الفاتورة يدويًا")}`,
+          variant: "destructive",
+        });
+        return;
+      }
+      if (orderRow.invoice_id) {
+        toast({
+          title: t("أمر البيع مفوتر مسبقًا"),
+          description: `${source.id} — ${t("الفاتورة")}: ${String(orderRow.invoice_id)}`,
+          variant: "destructive",
+        });
+        return;
+      }
+      linkedSalesOrderIdRef.current = source.id;
+      linkedSalesOrderCustomerRef.current = {
+        id: source.customerId,
+        name: source.customer,
+      };
+      if (source.items.length > 0) {
+        setItems((current) =>
+          source.items.map((line, index) => ({
+            id: index + 1,
+            description: line.description,
+            // حساب الإيراد الافتراضي نفسه الذي يستخدمه النموذج لبنوده
+            accountCode: current[0]?.accountCode ?? "411",
+            quantity: line.quantity,
+            unitPrice: line.unitPrice,
+            discount: line.discount,
+            taxPercent: SAUDI_STANDARD_VAT_RATE,
+          })),
+        );
+      }
+      setPendingOrderCustomer({ id: source.customerId, name: source.customer });
+    };
+    void loadSalesOrder();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingOrderCustomer || customerOptions.length === 0) return;
+    const option =
+      customerOptions.find(
+        (row) => Boolean(pendingOrderCustomer.id) && row.id === pendingOrderCustomer.id,
+      ) ??
+      customerOptions.find(
+        (row) => row.name === pendingOrderCustomer.name.trim(),
+      );
+    setPendingOrderCustomer(null);
+    if (option) {
+      selectCustomerOption(option);
+    } else {
+      toast({
+        title: t("عميل أمر البيع غير موجود في العملاء النشطين"),
+        description: t("اختر العميل قبل حفظ الفاتورة"),
+        variant: "destructive",
+      });
+    }
+  }, [customerOptions, pendingOrderCustomer]);
+
+  // ربط أمر البيع بالفاتورة بعد حفظها؛ الفشل تنبيه فقط (الفاتورة محفوظة)
+  const linkSalesOrderToInvoice = async (invoiceId: string) => {
+    const orderId = linkedSalesOrderIdRef.current;
+    if (!orderId) return;
+    linkedSalesOrderIdRef.current = "";
+    try {
+      const { data: linked, error: linkError } = await supabase
+        .from("sales_orders")
+        .update({ invoice_id: invoiceId, status: "invoiced" })
+        .eq("id", orderId)
+        .is("invoice_id", null)
+        .select("id");
+      if (linkError || !linked?.length) throw new Error(linkError?.message ?? "");
+    } catch {
+      toast({
+        title: t("تعذر ربط أمر البيع بالفاتورة"),
+        description: `${orderId} — ${t("الفاتورة محفوظة؛ حدّث حالة أمر البيع لاحقًا")}`,
+      });
+    }
   };
 
   const handleAddItem = () => {
@@ -2750,6 +2999,41 @@ function InvoiceForm({
       return;
     }
 
+    // فاتورة محوّلة من أمر بيع: لنفس العميل، والأمر لم يُفوتر في الأثناء (تبويب آخر أو مستخدم آخر)
+    if (linkedSalesOrderIdRef.current) {
+      const orderCustomer = linkedSalesOrderCustomerRef.current;
+      const customerDiffers = orderCustomer
+        ? orderCustomer.id
+          ? Boolean(customerId) && customerId !== orderCustomer.id
+          : customer.trim() !== orderCustomer.name.trim()
+        : false;
+      if (customerDiffers) {
+        toast({
+          title: t("العميل يختلف عن عميل أمر البيع"),
+          description: t(
+            "الفاتورة المحوّلة من أمر بيع تكون لعميل الأمر نفسه. لفاتورة عميل آخر أنشئ فاتورة جديدة دون الأمر.",
+          ),
+          variant: "destructive",
+        });
+        return;
+      }
+      const { data: orderState, error: orderStateError } = await supabase
+        .from("sales_orders")
+        .select("invoice_id")
+        .eq("id", linkedSalesOrderIdRef.current)
+        .maybeSingle();
+      if (orderStateError || !orderState || orderState.invoice_id) {
+        toast({
+          title: t("أمر البيع مفوتر مسبقًا"),
+          description: orderState?.invoice_id
+            ? `${linkedSalesOrderIdRef.current} — ${t("الفاتورة")}: ${String(orderState.invoice_id)}`
+            : t("تعذر التحقق من حالة أمر البيع؛ حاول مرة أخرى"),
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     // المرحلة الأولى: الفاتورة لا تُرسل للهيئة، فلا يُطلب تأكيد الإرسال الحقيقي
     const companyInPhase1 = COMPANY_PROFILE.zatcaPhase === "phase1";
     const productionConfirmation = companyInPhase1
@@ -2859,6 +3143,8 @@ function InvoiceForm({
       if (data) {
         // البنود والعنوان والملاحظات محفوظة في قاعدة البيانات؛ لا حاجة لنسخة في المتصفح
         const savedInvoiceId = String(data.id ?? attemptId);
+        // فاتورة من أمر بيع: يُربط الأمر بها (لا يؤثر على الترحيل أو الإرسال)
+        void linkSalesOrderToInvoice(savedInvoiceId);
         const accounting = await supabase.rpc("post_sales_invoice_accounting", {
           p_invoice_id: savedInvoiceId,
         });

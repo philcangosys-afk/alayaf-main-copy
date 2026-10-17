@@ -179,34 +179,62 @@ export default function FleetTrips() {
   const driverChoices = drivers.filter((driver) => driver.status === "active" && licenseValidOn(driver, startDate));
   const selectedVehicle = vehicleById.get(form.vehicleId);
   const selectedDriver = driverById.get(form.driverId);
+  const editingTrip = editingId ? trips.find((trip) => trip.id === editingId) : undefined;
+  // عداد البداية يُعدَّل ما دامت الرحلة جارية؛ القاعدة تمنع تغييره بعد الإغلاق أو الإلغاء (FLEET_TRIP_CLOSED)
+  const startOdometerEditable = !editingId || editingTrip?.status === "open";
+  /** أعلى قراءة للمركبة قبل الرحلة المعدّلة: عداد الافتتاح وعدادات نهاية رحلاتها المغلقة الأخرى (لا تُفتح رحلة ثانية للمركبة أثناء رحلة جارية). */
+  const priorOdometer = (trip: Trip) => trips
+    .filter((item) => item.vehicleId === trip.vehicleId && item.id !== trip.id && item.status === "closed" && item.endOdometer !== null)
+    .reduce((max, item) => Math.max(max, item.endOdometer ?? 0), vehicleById.get(trip.vehicleId)?.openingOdometer ?? 0);
+  const minimumStartOdometer = editingId ? (editingTrip ? priorOdometer(editingTrip) : null) : (selectedVehicle?.odometer ?? null);
   const startOdometerValue = form.startOdometer.trim() === "" ? null : Number(form.startOdometer);
-  const odometerWarning = !editingId && selectedVehicle && startOdometerValue !== null && Number.isFinite(startOdometerValue) && startOdometerValue < selectedVehicle.odometer;
+  const odometerWarning = startOdometerEditable && minimumStartOdometer !== null && startOdometerValue !== null && Number.isFinite(startOdometerValue) && startOdometerValue < minimumStartOdometer;
+  const odometerBelowText = (minimum: number) => `${t(editingId
+    ? "عداد بداية الرحلة لا يمكن أن يقل عن آخر قراءة مسجلة للمركبة قبل هذه الرحلة"
+    : "عداد بداية الرحلة لا يمكن أن يقل عن عداد المركبة الحالي؛ العداد لا يرجع للخلف")}: ${formatNumber(minimum)} ${t("كم")}`;
 
   const save = async () => {
+    const startOdometer = Number(form.startOdometer);
     if (!editingId) {
       if (!form.vehicleId || !form.driverId) { setError(t("اختر المركبة والسائق")); return; }
       if (!isInputValue(form.startAt)) { setError(t("أدخل تاريخ ووقت بداية الرحلة")); return; }
-      const startOdometer = Number(form.startOdometer);
-      if (form.startOdometer.trim() === "" || !Number.isFinite(startOdometer) || startOdometer < 0) { setError(t("أدخل قراءة عداد البداية")); return; }
       if (!selectedDriver || selectedDriver.status !== "active" || !licenseValidOn(selectedDriver, startDate)) {
         setError(t("رخصة السائق منتهية في تاريخ الرحلة؛ جدّد الرخصة في شاشة السائقين أولًا."));
         return;
       }
+    }
+    if (startOdometerEditable && (form.startOdometer.trim() === "" || !Number.isFinite(startOdometer) || startOdometer < 0)) { setError(t("أدخل قراءة عداد البداية")); return; }
+    // عند التعديل يُتحقق من العداد إن غُيِّر فقط، حتى لا تتعطل تعديلات الوصف لرحلة قديمة
+    if (editingTrip && startOdometerEditable && startOdometer !== editingTrip.startOdometer) {
+      const minimum = priorOdometer(editingTrip);
+      if (startOdometer < minimum) { setError(odometerBelowText(minimum)); return; }
     }
     if (!form.purpose.trim()) { setError(t("أدخل الغرض من الرحلة")); return; }
     const payload: Record<string, unknown> = {
       origin: form.origin.trim() || null, destination: form.destination.trim() || null, purpose: form.purpose.trim(),
       cost_center_id: form.costCenterId || null, notes: form.notes.trim() || null,
     };
-    // المركبة والسائق ووقت وعداد البداية تُحدد عند التسجيل فقط؛ رقم الرحلة يولّده النظام
+    // المركبة والسائق ووقت البداية تُحدد عند التسجيل فقط؛ عداد البداية يُصحَّح ما دامت الرحلة جارية؛ رقم الرحلة يولّده النظام
     if (!editingId) {
       payload.vehicle_id = form.vehicleId;
       payload.driver_id = form.driverId;
       payload.start_at = inputToIso(form.startAt);
-      payload.start_odometer = Number(form.startOdometer);
+      payload.start_odometer = startOdometer;
+    } else if (editingTrip && startOdometerEditable && startOdometer !== editingTrip.startOdometer) {
+      payload.start_odometer = startOdometer;
     }
     setBusy(true);
     setError("");
+    if (!editingId) {
+      // عداد المركبة الحالي من القاعدة لحظة الحفظ (قد يكون تغيّر منذ فتح الشاشة)
+      const { data: freshVehicle } = await supabase.from("fleet_vehicles").select("current_odometer").eq("id", form.vehicleId).maybeSingle();
+      const vehicleOdometer = freshVehicle ? numberOf((freshVehicle as Record<string, unknown>).current_odometer) : (selectedVehicle?.odometer ?? 0);
+      if (startOdometer < vehicleOdometer) {
+        setBusy(false);
+        setError(odometerBelowText(vehicleOdometer));
+        return;
+      }
+    }
     const { error: saveError } = editingId
       ? await supabase.from("fleet_trips").update(payload).eq("id", editingId)
       : await supabase.from("fleet_trips").insert(payload);
@@ -265,7 +293,6 @@ export default function FleetTrips() {
     await load();
   };
 
-  const editingTrip = editingId ? trips.find((trip) => trip.id === editingId) : undefined;
   const closeEnd = closeForm.endOdometer.trim() === "" ? null : Number(closeForm.endOdometer);
   const arrow = direction === "rtl" ? "←" : "→";
   const input = "mt-1 h-10 w-full rounded border px-3 text-sm";
@@ -343,10 +370,12 @@ export default function FleetTrips() {
                 <input type="datetime-local" value={form.startAt} disabled={Boolean(editingId)} onChange={(event) => update("startAt")(event.target.value)} className={`${input} disabled:bg-slate-50`} />
               </label>
               <label className="text-xs text-slate-600">{t("عداد البداية (كم)")} *
-                <input type="number" min="0" value={form.startOdometer} disabled={Boolean(editingId)} onChange={(event) => update("startOdometer")(event.target.value)} className={`${input} disabled:bg-slate-50`} />
-                {!editingId && selectedVehicle && (
-                  <span className={`mt-1 block text-[11px] ${odometerWarning ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-                    {odometerWarning ? t("أقل من عداد المركبة الحالي") : t("عداد المركبة الحالي")}: {formatNumber(selectedVehicle.odometer)}
+                <input type="number" min={minimumStartOdometer ?? 0} value={form.startOdometer} disabled={!startOdometerEditable} onChange={(event) => update("startOdometer")(event.target.value)} className={`${input} disabled:bg-slate-50`} />
+                {startOdometerEditable && selectedVehicle && minimumStartOdometer !== null && (
+                  <span className={`mt-1 block text-[11px] ${odometerWarning ? "font-semibold text-red-700" : "text-slate-500"}`}>
+                    {editingId
+                      ? (odometerWarning ? t("أقل من آخر قراءة للمركبة قبل الرحلة") : t("آخر قراءة للمركبة قبل الرحلة"))
+                      : (odometerWarning ? t("أقل من عداد المركبة الحالي") : t("عداد المركبة الحالي"))}: {formatNumber(minimumStartOdometer)}
                   </span>
                 )}
               </label>
@@ -363,7 +392,7 @@ export default function FleetTrips() {
             </div>
             <p className="mt-3 text-xs text-slate-500">
               {t(editingId
-                ? "تُعدَّل بيانات الوصف فقط؛ المركبة والسائق ووقت وعداد البداية ثابتة بعد التسجيل. لإيقاف رحلة خاطئة ألغِها ثم سجّلها من جديد."
+                ? "يُعدَّل الوصف وعداد البداية ما دامت الرحلة جارية؛ المركبة والسائق ووقت البداية ثابتة بعد التسجيل. لإيقاف رحلة خاطئة ألغِها ثم سجّلها من جديد."
                 : "تُسجل الرحلة على مركبة متاحة وسائق نشط رخصته سارية في تاريخ الرحلة، ولا يُسمح بأكثر من رحلة جارية للمركبة أو السائق. إغلاق الرحلة يحدّث عداد المركبة تلقائيًا.")}
             </p>
             <div className="mt-4 flex justify-end">
