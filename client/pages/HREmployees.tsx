@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Layout from "@/components/Layout";
-import { COMPANY_PROFILE, PLATFORM_NAME_EN } from "@/lib/companyProfile";
+import { COMPANY_PROFILE, PLATFORM_NAME_EN, isSaudiCompany } from "@/lib/companyProfile";
 import {
   Users,
   Search,
@@ -743,7 +743,7 @@ function EmployeeView({ employee: emp, onBack, onEdit }: { employee: EmpFormData
                 /></Fragment>
               ))}
               <InfoRow label={t("إجمالي الراتب الشهري")} value={money(total)} />
-              <InfoRow label={t("التأمينات الاجتماعية")} value={emp.socialInsurance === "نعم" ? `${t("نعم")} — ${emp.socialInsuranceType || "—"}` : emp.socialInsurance === "" ? t("غير محدد") : t("لا")} />
+              {isSaudiCompany() ? <InfoRow label={t("التأمينات الاجتماعية")} value={emp.socialInsurance === "نعم" ? `${t("نعم")} — ${emp.socialInsuranceType || "—"}` : emp.socialInsurance === "" ? t("غير محدد") : t("لا")} /> : null}
               <InfoRow label={t("البنك")} value={emp.bankName} />
               <InfoRow label={t("الآيبان")} value={emp.iban} />
             </InfoGroup>

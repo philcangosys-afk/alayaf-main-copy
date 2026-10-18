@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
 import { Clock3, ShieldAlert, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { companyStatusMessage, loadCompanyState, useCompany } from "@/lib/companyContext";
-import AuthShell, { authButtonStyle } from "@/components/AuthShell";
+import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authLinkClass } from "@/components/AuthShell";
 import { buildBusinessSession } from "@/lib/businessSession";
 
 /** حالة المنشأة عندما لا تكون فعالة: بانتظار الموافقة، موقوفة، مرفوضة، عضو معطّل، أو حساب إدارة المنصة */
@@ -47,26 +46,28 @@ export default function CompanyStatus() {
   };
 
   return (
-    <AuthShell subtitle={company.company?.name_ar || "حالة المنشأة"}>
-      <div className="text-center space-y-4 text-white">
-        <Icon className={`mx-auto h-12 w-12 ${company.status === "pending" ? "text-amber-400" : "text-rose-400"}`} />
-        <p className="text-lg font-bold">{message.title}</p>
-        <p className="text-sm text-white/70 leading-7">{message.body}</p>
-        {company.company?.code ? (
-          <p className="text-xs text-white/50">
-            رقم المنشأة: <span className="font-mono" dir="ltr">{company.company.code}</span>
-          </p>
-        ) : null}
+    <AuthShell
+      title={message.title}
+      subtitle={company.company?.name_ar || "حالة المنشأة"}
+      footer={<button type="button" onClick={() => void logout()} className={authLinkClass}>تسجيل الخروج</button>}
+    >
+      <div className="flex items-start gap-4">
+        <Icon className={`mt-1 h-9 w-9 shrink-0 ${company.status === "pending" ? "text-[#B54708]" : "text-[#B42318]"}`} aria-hidden="true" />
+        <div className="space-y-2">
+          <p className="text-[15px] leading-8" style={{ color: AUTH_COLORS.text }}>{message.body}</p>
+          {company.company?.code ? (
+            <p className="text-[13px]" style={{ color: AUTH_COLORS.muted }}>
+              رقم المنشأة: <span className="font-semibold" dir="ltr">{company.company.code}</span>
+            </p>
+          ) : null}
+        </div>
       </div>
       {company.status === "pending" || company.status === "error" ? (
-        <Button type="button" onClick={() => void recheck()} disabled={checking} className="w-full h-11 font-bold rounded-xl" style={authButtonStyle}>
-          <RefreshCw className={`ml-2 h-4 w-4 ${checking ? "animate-spin" : ""}`} />
+        <button type="button" onClick={() => void recheck()} disabled={checking} className={`${authButtonClass} inline-flex items-center justify-center gap-2`} style={authButtonStyle}>
+          <RefreshCw className={`h-4 w-4 ${checking ? "animate-spin" : ""}`} aria-hidden="true" />
           {checking ? "جاري التحقق..." : "تحقق من حالة الطلب"}
-        </Button>
+        </button>
       ) : null}
-      <button type="button" onClick={() => void logout()} className="block w-full text-center text-sm text-white/40 hover:text-white/70">
-        تسجيل الخروج
-      </button>
     </AuthShell>
   );
 }

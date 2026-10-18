@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { useI18n } from "@/i18n";
 import { riyadhDateString } from "@/lib/utils";
 import { COMPANY_REPORT_BRAND, exportReportExcel, printReport, type ReportCell, type ReportColumn } from "@/lib/reportExport";
+import { isSaudiCompany, isSaudiOnlyPath } from "@/lib/companyProfile";
 import { accountClass, fetchPostedLedger, fiscalYearStart, isIncomeStatementAccount, type LedgerAccount, type LedgerEntry, type LedgerLine } from "@/lib/ledgerData";
 
 type ReportKind = "income" | "comprehensive" | "position";
@@ -121,7 +122,8 @@ export default function AccountingReports() {
         <section className="mt-6 border-t border-slate-200 pt-5">
           <h2 className="mb-3 text-sm font-bold text-slate-800">{t("باقي التقارير")}</h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {REPORT_LINKS.map((section) => <div key={section.title} className="overflow-hidden rounded border border-slate-200 bg-white">
+            {/* تقارير الضريبة والزكاة السعودية لمنشآت السعودية فقط (S14) */}
+            {REPORT_LINKS.filter((section) => isSaudiCompany() || !section.items.some((item) => isSaudiOnlyPath(item.path))).map((section) => <div key={section.title} className="overflow-hidden rounded border border-slate-200 bg-white">
               <h3 className="bg-slate-800 px-3 py-2 text-xs font-bold text-white">{t(section.title)}</h3>
               <div className="divide-y divide-slate-100">{section.items.map((item) => <button key={item.path} onClick={() => navigate(item.path)} className="flex w-full items-center justify-between px-3 py-2 text-start text-xs text-slate-600 hover:bg-blue-50 hover:text-blue-700"><span>{t(item.label)}</span><span className="text-slate-300">‹</span></button>)}</div>
             </div>)}

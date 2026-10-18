@@ -327,6 +327,8 @@ const App = () => (
           <Route path="/expenses/reclassification" element={<BulkReclassification />} />
           <Route path="/expenses/fixed-assets" element={<FixedAssets />} />
           <Route path="/expenses/settings" element={<AccountingSettings />} />
+          {/* S13: ترحيل الرواتب من المحاسبة لصاحب «ترحيل الرواتب» (accounting.payroll_posting) بلا صلاحيات الموارد البشرية */}
+          <Route path="/expenses/payroll-posting" element={<HRPayrollTransfer />} />
           <Route path="/expenses/vouchers" element={<ExpenseManagement />} />
           <Route path="/expenses/petty-cash" element={<ExpenseManagement />} />
           <Route path="/expenses/reports" element={<AccountingReports />} />

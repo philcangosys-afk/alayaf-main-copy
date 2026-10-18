@@ -10,6 +10,7 @@ import { COMPANY_PROFILE } from "@/lib/companyProfile";
 import { escapeHtml, riyadhDateString, SAUDI_STANDARD_VAT_RATE } from "@/lib/utils";
 import { canManagePerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
+import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
 
 // طلب إشعار دائن من المورد: مستند نرسله للمورد نطلب فيه تخفيضًا أو إرجاعًا.
 // لا يُرحَّل ولا يغيّر رصيد المورد أو الضريبة؛ الأثر المحاسبي يأتي فقط من إشعار المورد الدائن عند وصوله.
@@ -48,6 +49,7 @@ const emptyItem = (): RequestItem => ({ id: crypto.randomUUID(), description: ""
 
 const requestErrorText = (message: string, t: (key: string) => string) => {
   const map: [string, string][] = [
+    ["BILLING_COUNTRY_NOT_READY", BILLING_COUNTRY_MESSAGE],
     ["PURCHASE_CREDIT_REQUEST_PERMISSION_REQUIRED", "إصدار الطلبات يحتاج صلاحية إدارة الإشعارات المدينة للمشتريات"],
     ["PURCHASE_CREDIT_REQUEST_DATE_INVALID", "تاريخ الطلب لا يسبق الفاتورة ولا يكون في المستقبل"],
     ["PURCHASE_CREDIT_REQUEST_REASON_REQUIRED", "اكتب سبب الطلب"],

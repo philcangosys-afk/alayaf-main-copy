@@ -32,6 +32,7 @@ import { dbErrorOr } from "@/lib/dbErrors";
 import PartyRegistrationDialog from "@/components/PartyRegistrationDialog";
 import { canManagePerm, checkPerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
+import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
 import {
   PageHeader,
   FilterBar,
@@ -1914,7 +1915,9 @@ function InvoiceForm({
 
       if (postError) {
         setError(
-          String(postError.message ?? "").includes("purchase_invoices_vendor_reference_uidx")
+          String(postError.message ?? "").includes("BILLING_COUNTRY_NOT_READY")
+            ? t(BILLING_COUNTRY_MESSAGE)
+            : String(postError.message ?? "").includes("purchase_invoices_vendor_reference_uidx")
             ? `${t("فاتورة المورد هذه مسجلة مسبقًا لنفس المورد")}. ${t("لا تُسجَّل الفاتورة مرتين")}`
             : String(postError.message ?? "").includes("PURCHASE_INVOICE_MANAGE_PERMISSION_REQUIRED")
             ? t("إنشاء فواتير المشتريات يحتاج صلاحية إدارة فواتير المشتريات")

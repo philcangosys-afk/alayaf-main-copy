@@ -37,6 +37,10 @@ export type CompanyRecord = {
   /** مرحلة الفوترة الإلكترونية (S6): phase1 الإصدار والحفظ، phase2 الربط مع الهيئة */
   zatca_phase?: ZatcaPhase;
   zatca_phase_changed_at?: string | null;
+  /** دولة المنشأة (S14، رمز ISO من حرفين؛ بلا قيمة = SA) */
+  country?: string;
+  /** فئة عدد الموظفين من التسجيل (S14) */
+  employees_range?: string | null;
 };
 
 export type ZatcaPhase = "phase1" | "phase2";
@@ -70,6 +74,8 @@ type CompanyProfile = {
   docPrefix: string;
   /** مرحلة الفوترة الإلكترونية للمنشأة (بلا قيمة من القاعدة = المرحلة الثانية كما كان) */
   zatcaPhase: ZatcaPhase;
+  /** دولة المنشأة (S14): SA تفعّل الأنظمة السعودية */
+  country: string;
   bank: {
     beneficiaryAr: string;
     beneficiaryEn: string;
@@ -98,6 +104,7 @@ const emptyProfile = (): CompanyProfile => ({
   code: "",
   docPrefix: "",
   zatcaPhase: "phase2",
+  country: "SA",
   bank: {
     beneficiaryAr: "",
     beneficiaryEn: "",
@@ -135,6 +142,7 @@ export function applyCompanyProfile(company: CompanyRecord | null | undefined) {
     next.code = text(company.code);
     next.docPrefix = text(company.prefix) || (next.code ? `${next.code}-` : "");
     next.zatcaPhase = company.zatca_phase === "phase1" ? "phase1" : "phase2";
+    next.country = text(company.country).toUpperCase() || "SA";
     next.bank.beneficiaryAr = nameAr;
     next.bank.beneficiaryEn = nameEn;
     next.bank.nameAr = text(company.bank_name);
@@ -144,6 +152,34 @@ export function applyCompanyProfile(company: CompanyRecord | null | undefined) {
   const { bank, ...rest } = next;
   Object.assign(COMPANY_PROFILE, rest);
   Object.assign(COMPANY_PROFILE.bank, bank);
+}
+
+/**
+ * الأنظمة السعودية (الفوترة الإلكترونية للهيئة، والتأمينات الاجتماعية، والإقرار الضريبي) لمنشآت السعودية فقط (S14).
+ * غيرها تُخفى عنها هذه الصفحات، والفوترة والضريبة حسب دولتها تُفعَّل في تحديث قادم.
+ */
+export function isSaudiCompany(country: string | null | undefined = COMPANY_PROFILE.country): boolean {
+  return (String(country ?? "").trim().toUpperCase() || "SA") === "SA";
+}
+
+/** صفحات سعودية فقط: تُخفى من القوائم وتُمنع بالرابط المباشر لمنشأة خارج السعودية */
+export const SAUDI_ONLY_PATHS = ["/zatca", "/hr/insurance/social", "/hr/insurance/list", "/expenses/tax", "/expenses/tax-reports"];
+
+// مطابقة بلا حساسية لحالة الأحرف، كما يطابق React Router المسارات (/ZATCA = /zatca)
+const matchesPrefix = (path: string, prefix: string) => {
+  const lower = path.toLowerCase();
+  return lower === prefix || lower.startsWith(`${prefix}/`);
+};
+
+export function isSaudiOnlyPath(path: string): boolean {
+  return SAUDI_ONLY_PATHS.some((prefix) => matchesPrefix(path, prefix));
+}
+
+/** صفحات المستندات التي يرفضها الخادم لمنشأة خارج السعودية حتى ملف الضريبة حسب الدولة (BILLING_COUNTRY_NOT_READY) */
+export const BILLING_PATHS = ["/sales/invoices", "/sales/credit-note", "/purchases/invoices", "/purchases/debit-notes", "/purchases/credit-notes", "/purchases/customs-declarations"];
+
+export function isBillingPath(path: string): boolean {
+  return BILLING_PATHS.some((prefix) => matchesPrefix(path, prefix));
 }
 
 /** بادئة أرقام المستندات للمنشأة الحالية ("1001-")، أو نص فارغ قبل الدخول */

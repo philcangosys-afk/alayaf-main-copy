@@ -6,6 +6,7 @@
  * المعامل t اختياري لترجمة الجمل عند اختيار اللغة الإنجليزية.
  */
 import { dbErrorText } from "@/lib/dbErrors";
+import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
 
 type Translate = (source: string) => string;
 const keepSource: Translate = (source) => source;
@@ -79,7 +80,7 @@ const ACCOUNTING_ERRORS: Array<[string, string]> = [
   ["NOT_A_MANUAL_JOURNAL", "هذا ليس قيدًا يدويًا."],
   ["MANUAL_JOURNAL_MANAGE_PERMISSION_REQUIRED", "لا تملك صلاحية القيود اليدوية."],
   // الحسابات البنكية والصناديق
-  ["BANK_ACCOUNT_IBAN_INVALID", "الآيبان يبدأ بـ SA ويليه 22 رقمًا."],
+  ["BANK_ACCOUNT_IBAN_INVALID", "الآيبان يبدأ بـ SA ويليه 22 رقمًا (الآيبان غير السعودي يُدعم في تحديث قادم؛ اتركه فارغًا الآن)."],
   ["BANK_ACCOUNT_NAME_REQUIRED", "اكتب اسم الحساب."],
   ["BANK_ACCOUNT_KIND_INVALID", "اختر نوع الحساب: بنك أو صندوق."],
   ["BANK_ACCOUNT_PARENT_INVALID", "الحساب الأب يجب أن يكون تحت «النقد وما يعادله» (111)، وليس تحت الشيكات."],
@@ -123,6 +124,7 @@ const ACCOUNTING_ERRORS: Array<[string, string]> = [
   ["ACCOUNT_LINKED_TO_COST_CENTER", "الحساب مربوط بمركز تكلفة."],
   ["ACCOUNT_USED_BY_EXPENSE_VOUCHER", "الحساب مستخدم في سند صرف."],
   ["ACCOUNT_USED_IN_POSTING_RULE", "الحساب مستخدم في قواعد الترحيل."],
+  ["BILLING_COUNTRY_NOT_READY", BILLING_COUNTRY_MESSAGE],
   ["ACCOUNT_PARENT_CYCLE", "لا يكون الحساب أبًا لأحد أجداده."],
   ["ACCOUNT_CANNOT_PARENT_ITSELF", "لا يكون الحساب أبًا لنفسه."],
   ["ACCOUNT_PARENT_NOT_FOUND", "الحساب الأب غير موجود."],

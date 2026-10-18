@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { riyadhDateString } from "@/lib/utils";
 import { canManagePerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
+import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
 
 // البيان الجمركي: ضريبة الاستيراد المدفوعة في الجمارك (الخانة 8 في الإقرار) والرسوم الجمركية.
 // القيد: مدين ضريبة المدخلات + مدين حساب التكلفة (الرسوم) / دائن البنك، أو الحساب الوسيط 2115 إذا دفعها المخلّص
@@ -42,6 +43,7 @@ type Option = { code: string; label: string };
 
 const errorText = (message: string, t: (key: string) => string) => {
   const map: [string, string][] = [
+    ["BILLING_COUNTRY_NOT_READY", BILLING_COUNTRY_MESSAGE],
     ["ACCOUNTING_MANAGE_PERMISSION_REQUIRED", "تسجيل البيانات الجمركية يحتاج صلاحية إدارة المحاسبة"],
     ["CUSTOMS_IMPORTER_CONFIRMATION_REQUIRED", "أكّد أن البيان الجمركي باسم الشركة (المستورد)"],
     ["CUSTOMS_DECLARATION_NUMBER_REQUIRED", "أدخل رقم البيان الجمركي"],

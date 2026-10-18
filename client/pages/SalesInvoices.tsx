@@ -41,9 +41,10 @@ import QRCode from "qrcode";
 import ZatcaQrCode from "@/components/ZatcaQrCode";
 import PartyRegistrationDialog from "@/components/PartyRegistrationDialog";
 import { useI18n } from "@/i18n";
-import { COMPANY_PROFILE, zatcaDeviceSerialKey } from "@/lib/companyProfile";
+import { COMPANY_PROFILE, isSaudiCompany, zatcaDeviceSerialKey } from "@/lib/companyProfile";
 import { checkPerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
+import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
 
 const statusColors: Record<string, string> = {
   "مدفوعة بالكامل": "bg-green-600 text-white",
@@ -130,6 +131,7 @@ const ZATCA_RESENDABLE_STATUSES = new Set(["pending", "failed", "rejected"]);
 const ZATCA_SYNTHETIC_MARKER =
   /(?:^|[^A-Z])(?:TEST(?:ING)?|SIM(?:ULATION|ULATED|ULATOR)?)(?:[^A-Z]|$)|تجريب/i;
 const salesInvoiceErrorMessages: Array<[string, string]> = [
+  ["BILLING_COUNTRY_NOT_READY", BILLING_COUNTRY_MESSAGE],
   [
     "SALES_INVOICE_SYNTHETIC_TEXT",
     "اسم العميل أو وصف أحد البنود يحتوي كلمة اختبارية (test أو simulation أو تجريبي)، والهيئة ترفض هذه الفاتورة في الإنتاج. عدّل النص ثم احفظ",
@@ -2589,8 +2591,9 @@ function InvoiceForm({
 }) {
   const { t, direction, formatNumber } = useSalesInvoicesI18n();
   // المرحلة الأولى بلا رقم ضريبي للمنشأة: لا تصدر فواتير مبيعات (القاعدة ترفضها)
+  // (S14) خارج السعودية: الفوترة متوقفة حتى الضريبة حسب الدولة، ولا يُطلب الرقم الضريبي السعودي
   const companyVatMissing =
-    COMPANY_PROFILE.zatcaPhase === "phase1" && !COMPANY_PROFILE.vatNumber.trim();
+    isSaudiCompany() && COMPANY_PROFILE.zatcaPhase === "phase1" && !COMPANY_PROFILE.vatNumber.trim();
   const [items, setItems] = useState([
     {
       id: 1,
@@ -2894,6 +2897,11 @@ function InvoiceForm({
 
   const handleSave = async (intent: "save" | "print") => {
     if (saveInFlight.current) return;
+    // منشأة خارج السعودية (S14): الخادم يرفض فواتير المبيعات حتى الضريبة حسب الدولة
+    if (!isSaudiCompany()) {
+      toast({ title: t("لا يمكن حفظ الفاتورة"), description: t(BILLING_COUNTRY_MESSAGE), variant: "destructive" });
+      return;
+    }
     // المرحلة الأولى: رمز QR إلزامي وفيه الرقم الضريبي، والقاعدة ترفض الفاتورة دونه
     if (companyVatMissing) {
       toast({

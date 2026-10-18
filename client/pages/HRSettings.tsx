@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { companyStorageKey } from "@/lib/companyProfile";
+import { companyStorageKey, isSaudiCompany } from "@/lib/companyProfile";
 import Layout from "@/components/Layout";
 import { useNavigate } from "react-router-dom";
 import { AlertTriangle, ArrowRight, CalendarClock, MapPin, Save, Settings2 } from "lucide-react";
@@ -176,7 +176,7 @@ export default function HRSettings() {
   const tabLabels: Record<TabKey, string> = {
     general: t("الإعدادات العامة"),
     recruitment: t("التوظيف والعقود"),
-    payroll: t("الرواتب والتأمينات"),
+    payroll: isSaudiCompany() ? t("الرواتب والتأمينات") : t("الرواتب"),
     leaves: t("الإجازات"),
     attendance: t("الدوام"),
   };
@@ -238,7 +238,7 @@ export default function HRSettings() {
   const saveLabel = useMemo(() => {
     if (activeTab === "general") return t("حفظ الإعدادات العامة");
     if (activeTab === "recruitment") return t("حفظ إعدادات التوظيف والعقود");
-    if (activeTab === "payroll") return t("حفظ إعدادات الرواتب والتأمينات");
+    if (activeTab === "payroll") return isSaudiCompany() ? t("حفظ إعدادات الرواتب والتأمينات") : t("حفظ إعدادات الرواتب");
     if (activeTab === "leaves") return t("حفظ إعدادات الإجازات");
     return t("حفظ إعدادات الدوام");
   }, [activeTab, t]);
@@ -596,13 +596,18 @@ function PayrollSettingsTab({
         </Field>
       </Section>
 
-      <Section title={t("إعدادات التأمينات الاجتماعية")} colorClass="bg-red-600">
-        <Field label={t("نسبة التأمينات على الموظف (%)")}>
-          <NumberInput value={value.gosiEmployeePct} onChange={(v) => onChange({ ...value, gosiEmployeePct: v })} />
-        </Field>
-        <Field label={t("نسبة التأمينات على صاحب العمل (%)")}>
-          <NumberInput value={value.gosiEmployerPct} onChange={(v) => onChange({ ...value, gosiEmployerPct: v })} />
-        </Field>
+      {/* نسب التأمينات الاجتماعية لمنشآت السعودية فقط (S14)؛ إعدادات نهاية الخدمة تبقى للجميع */}
+      <Section title={isSaudiCompany() ? t("إعدادات التأمينات الاجتماعية") : t("إعدادات نهاية الخدمة")} colorClass="bg-red-600">
+        {isSaudiCompany() ? (
+          <>
+            <Field label={t("نسبة التأمينات على الموظف (%)")}>
+              <NumberInput value={value.gosiEmployeePct} onChange={(v) => onChange({ ...value, gosiEmployeePct: v })} />
+            </Field>
+            <Field label={t("نسبة التأمينات على صاحب العمل (%)")}>
+              <NumberInput value={value.gosiEmployerPct} onChange={(v) => onChange({ ...value, gosiEmployerPct: v })} />
+            </Field>
+          </>
+        ) : null}
         <Field label={t("احتساب نهاية الخدمة بعد (سنة)")}>
           <NumberInput value={value.eosAfterYears} onChange={(v) => onChange({ ...value, eosAfterYears: v })} />
         </Field>

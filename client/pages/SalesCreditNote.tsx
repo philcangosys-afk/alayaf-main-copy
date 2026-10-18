@@ -9,7 +9,8 @@ import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
 import ZatcaQrCode from "@/components/ZatcaQrCode";
 import { useI18n } from "@/i18n";
-import { COMPANY_PROFILE, zatcaDeviceSerialKey, companyDocPrefix } from "@/lib/companyProfile";
+import { COMPANY_PROFILE, zatcaDeviceSerialKey, companyDocPrefix, isSaudiCompany } from "@/lib/companyProfile";
+import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
 
 const zatcaStatusLabels: Record<string, string> = {
   pending: "بانتظار الإرسال",
@@ -28,6 +29,7 @@ const ZATCA_RESENDABLE_STATUSES = new Set(["pending", "failed", "rejected"]);
 const ZATCA_SYNTHETIC_MARKER =
   /(?:^|[^A-Z])(?:TEST(?:ING)?|SIM(?:ULATION|ULATED|ULATOR)?)(?:[^A-Z]|$)|تجريب/i;
 const salesNoteErrorMessages: Array<[string, string]> = [
+  ["BILLING_COUNTRY_NOT_READY", BILLING_COUNTRY_MESSAGE],
   ["SALES_NOTE_ORIGINAL_NOT_ACCEPTED", "الفاتورة الأصلية لم تقبلها الهيئة بعد؛ لا يُصدر إشعار عليها حتى تُبلَّغ"],
   ["SALES_NOTE_ORIGINAL_PHASE1_AFTER_PHASE2", "الفاتورة الأصلية صدرت في المرحلة الأولى والمنشأة الآن في المرحلة الثانية؛ إشعارها غير متاح حاليًا"],
   ["SALES_NOTE_ORIGINAL_PHASE2_WHILE_PHASE1", "الفاتورة الأصلية صدرت في مسار الربط مع الهيئة والمنشأة الآن في المرحلة الأولى؛ لا يصدر عليها إشعار"],
@@ -618,6 +620,11 @@ export default function SalesCreditNote() {
       return;
     }
 
+    // منشأة خارج السعودية (S14): الخادم يرفض الإشعارات حتى الضريبة حسب الدولة
+    if (!isSaudiCompany()) {
+      toast({ title: t("لا يمكن إصدار الإشعار"), description: t(BILLING_COUNTRY_MESSAGE), variant: "destructive" });
+      return;
+    }
     // المرحلة الأولى: الإشعار لا يُرسل للهيئة، فلا يُطلب تأكيد الإرسال الحقيقي
     const companyInPhase1 = COMPANY_PROFILE.zatcaPhase === "phase1";
     // ورمز QR فيها إلزامي وفيه الرقم الضريبي، والقاعدة ترفض الإشعار دونه

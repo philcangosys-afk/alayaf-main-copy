@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { supabase } from "@/lib/supabaseClient";
 import { useCompany } from "@/lib/companyContext";
+import { isSaudiCompany } from "@/lib/companyProfile";
+import { countryName } from "@/lib/countries";
 import DocumentTemplateWorkspace from "@/components/document-templates/DocumentTemplateWorkspace";
 
 type EditableProfile = {
@@ -58,6 +60,7 @@ export default function Settings() {
 
   const companyFields: Array<{ label: string; value: string; mono?: boolean }> = [
     { label: "رقم المنشأة في المنصة", value: record?.code ? String(record.code) : "", mono: true },
+    { label: "الدولة", value: countryName(record?.country || "SA") },
     { label: "اسم الشركة", value: record?.name_ar ?? "" },
     { label: "الاسم بالإنجليزية", value: record?.name_en ?? "" },
     { label: "الرقم الضريبي", value: record?.vat_number ?? "", mono: true },
@@ -69,7 +72,8 @@ export default function Settings() {
   const saveProfile = async () => {
     const iban = draft.iban.replace(/\s+/g, "").toUpperCase();
     if (iban && !IBAN_PATTERN.test(iban)) {
-      toast.error(t(PROFILE_ERRORS.COMPANY_IBAN_INVALID));
+      // الآيبان غير السعودي يأتي مع الضريبة حسب الدولة (القاعدة تقبل SA فقط حاليًا)
+      toast.error(t(isSaudiCompany() ? PROFILE_ERRORS.COMPANY_IBAN_INVALID : "الآيبان غير السعودي يُدعم في تحديث قادم مع الفوترة حسب الدولة؛ اتركه فارغًا الآن"));
       return;
     }
     const logoUrl = draft.logo_url.trim();
@@ -130,9 +134,11 @@ export default function Settings() {
           <button onClick={() => setActiveSection("company")} className={cn("rounded-xl px-5 py-2.5 font-bold transition-all duration-200", activeSection === "company" ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-500/20" : "border border-border/50 bg-white text-foreground hover:bg-muted/50")}>
             {t("معلومات الشركة")}
           </button>
-          <a href="/zatca/settings" className="inline-flex rounded-xl border border-border/50 bg-white px-5 py-2.5 font-bold text-foreground transition-colors hover:bg-muted/50">
-            {t("إعدادات ZATCA")}
-          </a>
+          {isSaudiCompany() ? (
+            <a href="/zatca/settings" className="inline-flex rounded-xl border border-border/50 bg-white px-5 py-2.5 font-bold text-foreground transition-colors hover:bg-muted/50">
+              {t("إعدادات ZATCA")}
+            </a>
+          ) : null}
           <a href="/expenses/settings" className="inline-flex rounded-xl border border-border/50 bg-white px-5 py-2.5 font-bold text-foreground transition-colors hover:bg-muted/50">
             {t("إعدادات المحاسبة")}
           </a>
@@ -144,7 +150,9 @@ export default function Settings() {
         {activeSection === "templates" ? <DocumentTemplateWorkspace /> : (
           <div className="space-y-6">
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              {t("الاسم والرقم الضريبي والسجل التجاري مطبوعة على الفواتير ومسجلة لدى هيئة الزكاة والضريبة (ZATCA)، وتعديلها عن طريق إدارة المنصة. بيانات التواصل والعنوان والحساب البنكي والشعار يعدّلها مدير النظام هنا.")}
+              {isSaudiCompany()
+                ? t("الاسم والرقم الضريبي والسجل التجاري مطبوعة على الفواتير ومسجلة لدى هيئة الزكاة والضريبة (ZATCA)، وتعديلها عن طريق إدارة المنصة. بيانات التواصل والعنوان والحساب البنكي والشعار يعدّلها مدير النظام هنا.")
+                : t("الاسم والرقم الضريبي والسجل التجاري تعدّلها إدارة المنصة، وتغيير الدولة يأتي في تحديث قادم. بيانات التواصل والعنوان والحساب البنكي والشعار يعدّلها مدير النظام هنا.")}
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-border/50 bg-white shadow-sm">

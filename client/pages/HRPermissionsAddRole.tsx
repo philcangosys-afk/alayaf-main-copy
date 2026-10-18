@@ -12,11 +12,15 @@ import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";
 import { hrRequestErrorText } from "@/lib/hrErrors";
+import { isSaudiCompany } from "@/lib/companyProfile";
 
 type Permission = { key: string; label: string };
 type PermissionGroup = { title: string; permissions: Permission[] };
 type ModuleNode = { key: string; label: string; children: Permission[] };
 type AccessLevel = "none" | "read" | "manage";
+
+/** صلاحيات صفحات سعودية فقط (الإقرار الضريبي وتقاريره): لا تظهر في محرر الأدوار لمنشأة خارج السعودية (S14) */
+const SAUDI_ONLY_PERMISSION_KEYS = new Set(["accounting.tax", "accounting.tax_reports"]);
 
 const MODULE_TREE: ModuleNode[] = [
   { key: "module.sales", label: "المبيعات", children: [
@@ -48,7 +52,7 @@ const MODULE_TREE: ModuleNode[] = [
     { key: "accounting.manual_journals", label: "القيود اليدوية" }, { key: "accounting.settings", label: "إعدادات المحاسبة" },
     { key: "accounting.fixed_assets", label: "الأصول الثابتة" }, { key: "accounting.reclassification", label: "إعادة التصنيف" },
     { key: "accounting.tax", label: "حساب الضرائب" }, { key: "accounting.tax_reports", label: "التقارير الضريبية" },
-    { key: "accounting.expenses", label: "المصروفات" },
+    { key: "accounting.expenses", label: "المصروفات" }, { key: "accounting.payroll_posting", label: "ترحيل الرواتب إلى المحاسبة" },
   ] },
   { key: "module.inventory", label: "المستودعات والمخازن", children: [
     { key: "inventory.items", label: "الأصناف" }, { key: "inventory.warehouses", label: "المستودعات" },
@@ -69,6 +73,8 @@ const MODULE_TREE: ModuleNode[] = [
   ] },
 ];
 
+// مفاتيح بعينها لا ترث من القسم الرئيسي (كما في الخادم ومسار الصفحة): لا يشملها اختيار القسم ولا «اختيار الكل»
+const EXACT_KEYS = new Set(["accounting.payroll_posting"]);
 const levelOf = (value: PermissionLevel | undefined): AccessLevel => value === "read" ? "read" : value === true || value === "manage" ? "manage" : "none";
 
 
@@ -215,7 +221,8 @@ export default function HRPermissionsAddRole() {
       : PERMISSION_GROUPS[activeTab].flatMap((group) => group.permissions),
     [activeTab],
   );
-  const allActiveSelected = activePermissions.length > 0 && activePermissions.every((permission) => levelOf(permissions[permission.key]) === "manage");
+  const allActiveSelected = activePermissions.length > 0
+    && activePermissions.filter((permission) => !EXACT_KEYS.has(permission.key)).every((permission) => levelOf(permissions[permission.key]) === "manage");
 
   const handlePermissionChange = (key: string, value: boolean) => {
     setPermissions((previous) => ({ ...previous, [key]: value }));
@@ -225,7 +232,8 @@ export default function HRPermissionsAddRole() {
     setPermissions((previous) => {
       const next = { ...previous };
       next[key] = level === "none" ? false : level;
-      if (cascade) node.children.forEach((child) => { next[child.key] = level === "none" ? false : level; });
+      // المفاتيح التي بعينها (EXACT_KEYS) لا يمنحها اختيار القسم الرئيسي (تُمنح بنقرتها هي)، لكن «بدون وصول» للقسم يسحبها
+      if (cascade) node.children.forEach((child) => { if (level === "none" || !EXACT_KEYS.has(child.key)) next[child.key] = level === "none" ? false : level; });
       return next;
     });
   };
@@ -239,7 +247,7 @@ export default function HRPermissionsAddRole() {
   const toggleCurrentTab = (checked: boolean) => {
     setPermissions((previous) => {
       const next = { ...previous };
-      activePermissions.forEach((permission) => { next[permission.key] = checked ? "manage" : false; });
+      activePermissions.forEach((permission) => { if (!EXACT_KEYS.has(permission.key)) next[permission.key] = checked ? "manage" : false; });
       return next;
     });
   };
@@ -266,7 +274,12 @@ export default function HRPermissionsAddRole() {
       toast.success(t(isEditing ? "تم تحديث الدور والصلاحيات" : "تم إضافة الدور والصلاحيات"));
       navigate("/hr/permissions/roles");
     } catch (error) {
-      toast.error(`${t("تعذر حفظ الدور")}: ${t(hrRequestErrorText(error, "خطأ غير معروف"))}`);
+      // الصلاحية التي فوق صلاحيات المستخدم تُسمّى (تفاصيل الخطأ من القاعدة)
+      const raw = String((error as { message?: unknown } | null)?.message ?? "");
+      const labels = new Map(MODULE_TREE.flatMap((module) => [[module.key, module.label] as const, ...module.children.map((child) => [child.key, child.label] as const)]));
+      const details = String((error as { details?: unknown } | null)?.details ?? "").trim()
+        .split(/\s*,\s*/).filter(Boolean).map((key) => (labels.has(key) ? t(labels.get(key) as string) : key)).join("، ");
+      toast.error(`${t("تعذر حفظ الدور")}: ${t(hrRequestErrorText(error, "خطأ غير معروف"))}${raw.includes("ROLE_PERMISSION_ABOVE_CALLER") && details ? ` (${details})` : ""}`);
     } finally {
       setLoading(false);
     }
@@ -344,10 +357,13 @@ export default function HRPermissionsAddRole() {
                       </div>
                       {expanded && (
                         <div className="grid grid-cols-1 gap-3 border-t border-emerald-100 bg-gray-50/60 p-4 lg:grid-cols-2">
-                          {module.children.map((child) => (
+                          {module.children.filter((child) => isSaudiCompany() || !SAUDI_ONLY_PERMISSION_KEYS.has(child.key)).map((child) => (
                             <div key={child.key} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-3">
-                              <span className="text-sm font-medium text-gray-800">{t(child.label)}</span>
-                              <AccessSelector value={levelOf(permissions[child.key] ?? permissions[module.key])} onChange={(level) => setAccessLevel(module, child.key, level)} />
+                              <span className="text-sm font-medium text-gray-800">
+                                {t(child.label)}
+                                {EXACT_KEYS.has(child.key) && <span className="mt-0.5 block text-xs font-normal text-amber-700">{t("لا يرث مستوى القسم الرئيسي؛ يُمنح بنفسه")}</span>}
+                              </span>
+                              <AccessSelector value={EXACT_KEYS.has(child.key) ? levelOf(permissions[child.key]) : levelOf(permissions[child.key] ?? permissions[module.key])} onChange={(level) => setAccessLevel(module, child.key, level)} />
                             </div>
                           ))}
                         </div>

@@ -5,9 +5,11 @@ import { Receipt, CheckCircle2, Loader2, Unlock } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { useI18n } from "@/i18n";
-import { readUserSession } from "@/lib/authSession";
+import { canManagePerm, readUserSession } from "@/lib/authSession";
+import { useRolePermissions } from "@/hooks/useRolePermissions";
 import { payrollApprovalErrorText } from "@/lib/hrErrors";
 import { riyadhMonth } from "@/lib/hrDates";
+import { isSaudiCompany } from "@/lib/companyProfile";
 
 type PayrollRow = {
   id: string;
@@ -21,10 +23,11 @@ type PayrollRow = {
   /** حصة المنشأة في التأمينات (S11): تُقيَّد مصروفًا مع الرواتب ولا تُخصم من الموظف */
   employer: number;
   net: number;
-  notes: string;
   status: string;
   accountingStatus: string;
   journalEntryId: string;
+  /** رقم القيد (1001-JE-…) بعد الترحيل */
+  entryNumber: string;
 };
 
 const HELD = "موقوف";
@@ -45,21 +48,29 @@ export default function HRPayrollTransfer() {
   const [loading, setLoading] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [releasingId, setReleasingId] = useState<string | null>(null);
+  const { permissions } = useRolePermissions();
+  // رفع إيقاف الصرف قرار إداري: لمن يدير الرواتب والمحاسبة معًا (كما في الخادم)، لا لصاحب «ترحيل الرواتب» وحده
+  const canReleaseHold = canManagePerm(permissions, "hr.payroll", "module.hr")
+    && (canManagePerm(permissions, "accounting.tax_reports") || canManagePerm(permissions, "accounting.accounts") || canManagePerm(permissions, "module.accounting"));
 
-  const load = async (p: string) => {
+  const load = async (p: string): Promise<PayrollRow[] | null> => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from("payroll")
-      .select("id, emp_id, emp_name, department, basic_salary, allowances, deductions, expense_reduction, social_insurance_employer, net_salary, notes, status, accounting_status, accounting_journal_entry_id")
-      .eq("month", p)
-      .order("emp_name");
+    // S13: صفوف الشهر من دالة الخادم (لصاحب «ترحيل الرواتب» في المحاسبة أو لمن يقرأ الرواتب)، بلا قراءة جدول الرواتب
+    let { data, error } = await supabase.rpc("list_payroll_for_posting", { p_period: p });
+    // قاعدة لم يُطبَّق عليها S13 بعد: القراءة المباشرة السابقة (لمن يقرأ الرواتب)
+    if (error && (error as { code?: string }).code === "PGRST202") {
+      ({ data, error } = await supabase
+        .from("payroll")
+        .select("id, emp_id, emp_name, department, basic_salary, allowances, deductions, expense_reduction, social_insurance_employer, net_salary, status, accounting_status, accounting_journal_entry_id")
+        .eq("month", p)
+        .order("emp_name"));
+    }
     setLoading(false);
     if (error) {
       toast({ title: t("تعذر تحميل كشف الرواتب"), description: t(payrollApprovalErrorText(error)), variant: "destructive" });
-      return;
+      return null;
     }
-    setRows(
-      (data ?? []).map((r: Record<string, unknown>) => ({
+    const mapped: PayrollRow[] = ((data ?? []) as Record<string, unknown>[]).map((r) => ({
         id: String(r.id),
         empId: String(r.emp_id ?? ""),
         empName: String(r.emp_name ?? "-"),
@@ -70,12 +81,13 @@ export default function HRPayrollTransfer() {
         absence: Number(r.expense_reduction ?? 0),
         employer: Number(r.social_insurance_employer ?? 0),
         net: Number(r.net_salary ?? 0),
-        notes: String(r.notes ?? ""),
         status: String(r.status ?? "معلق"),
         accountingStatus: String(r.accounting_status ?? "unposted"),
         journalEntryId: String(r.accounting_journal_entry_id ?? ""),
-      }))
-    );
+        entryNumber: String(r.accounting_entry_number ?? ""),
+      }));
+    setRows(mapped);
+    return mapped;
   };
 
   useEffect(() => {
@@ -136,8 +148,10 @@ export default function HRPayrollTransfer() {
       toast({ title: t("تعذر الترحيل"), description: postingErrorText(t, error), variant: "destructive" });
       return;
     }
-    toast({ title: t("تم الترحيل"), description: `${t("تم إنشاء قيد الرواتب وربطه بالسجلات")}: ${formatNumber(transferable.length)} — ${t("رقم القيد")}: ${String(journalEntryId)}` });
-    void load(period);
+    // رقم القيد (1001-JE-…) من صفوف الشهر بعد الترحيل بدل معرّفه الداخلي؛ إن لم يُعرف يُعرض المعرّف
+    const reloaded = await load(period);
+    const entryLabel = reloaded?.find((r) => r.journalEntryId === String(journalEntryId) && r.entryNumber)?.entryNumber || String(journalEntryId);
+    toast({ title: t("تم الترحيل"), description: `${t("تم إنشاء قيد الرواتب وربطه بالسجلات")}: ${formatNumber(transferable.length)} — ${t("رقم القيد")}: ${entryLabel}` });
   };
 
   // رفع إيقاف الصرف لراتب مرحّل: لا يتغير القيد ولا المبالغ؛ يصبح الراتب جاهزًا للصرف من الرواتب المستحقة
@@ -183,15 +197,17 @@ export default function HRPayrollTransfer() {
               </div>
               <div className="space-y-1 text-sm text-gray-600 leading-relaxed">
                 <p>{t("ترحيل استحقاقات واستقطاعات رواتب الفترة المحددة إلى النظام المحاسبي بقيد واحد، بعد اعتماد كل رواتب الشهر. بعد الترحيل تتحول حالة السجل إلى «مرحّل» ولا يُرحّل مرة أخرى.")}</p>
-                <p>{t("مصروف الرواتب = الاستحقاقات بعد خصم الغياب والإجازات غير المدفوعة والبدلات المخصومة. حصة المنشأة في التأمينات تُقيَّد في القيد نفسه مصروفًا على حسابها (أو على مصروف الرواتب إن لم يُضبط حسابها) والتزامًا على حساب التأمينات. الراتب الموقوف (بموافقة الإدارة) يُستحق في القيد ويُحبس صرفه حتى رفع الإيقاف من هذه الصفحة. لا يُرحَّل راتب تغيّر بعد موافقة الإدارة.")}</p>
+                <p>{isSaudiCompany()
+                  ? t("مصروف الرواتب = الاستحقاقات بعد خصم الغياب والإجازات غير المدفوعة والبدلات المخصومة. حصة المنشأة في التأمينات تُقيَّد في القيد نفسه مصروفًا على حسابها (أو على مصروف الرواتب إن لم يُضبط حسابها) والتزامًا على حساب التأمينات. الراتب الموقوف (بموافقة الإدارة) يُستحق في القيد ويُحبس صرفه حتى رفع الإيقاف من هذه الصفحة. لا يُرحَّل راتب تغيّر بعد موافقة الإدارة.")
+                  : t("مصروف الرواتب = الاستحقاقات بعد خصم الغياب والإجازات غير المدفوعة والبدلات المخصومة. الراتب الموقوف (بموافقة الإدارة) يُستحق في القيد ويُحبس صرفه حتى رفع الإيقاف من هذه الصفحة. لا يُرحَّل راتب تغيّر بعد موافقة الإدارة.")}</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+            <div className={`grid grid-cols-2 gap-4 ${isSaudiCompany() ? "md:grid-cols-6" : "md:grid-cols-5"}`}>
               <SummaryCard label="إجمالي الأساسي والبدلات" value={totals.basic + totals.allowances} />
               <SummaryCard label="خصم الغياب والإجازات والبدلات المخصومة" value={totals.absence} tone="red" />
               <SummaryCard label="مصروف الرواتب" value={totals.basic + totals.allowances - totals.absence} />
-              <SummaryCard label="حصة المنشأة في التأمينات" value={totals.employer} />
+              {isSaudiCompany() ? <SummaryCard label="حصة المنشأة في التأمينات" value={totals.employer} /> : null}
               <SummaryCard label="صافي للصرف" value={totals.net - totals.held} tone="green" />
               <SummaryCard label="موقوف الصرف" value={totals.held} tone="orange" />
             </div>
@@ -228,7 +244,7 @@ export default function HRPayrollTransfer() {
                       <td className="py-2.5 px-4">
                         <div className="flex items-center gap-2">
                           <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusClass(r)}`}>{statusLabel(r)}</span>
-                          {r.status === HELD && isPosted(r) && (
+                          {r.status === HELD && isPosted(r) && canReleaseHold && (
                             <button
                               type="button"
                               onClick={() => void releaseHold(r)}

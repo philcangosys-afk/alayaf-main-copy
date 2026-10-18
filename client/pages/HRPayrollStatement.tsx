@@ -17,6 +17,7 @@ import { computePayroll, savePayrollRows, type PayrollComputation, type PayrollL
 import PayrollApprovalDialog from "@/components/hr/PayrollApprovalDialog";
 import PayrollFreshnessNotice from "@/components/hr/PayrollFreshnessNotice";
 import { freshnessErrorText, savedPayrollFreshness, type PayrollFreshness } from "@/lib/payrollFreshness";
+import { isSaudiCompany } from "@/lib/companyProfile";
 
 type EmpLite = {
   id: string;
@@ -289,6 +290,8 @@ export default function HRPayrollStatement() {
   };
 
   const moneyText = (value: number) => formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // عمود التأمينات الاجتماعية لمنشآت السعودية فقط (S14)
+  const gosiVisible = isSaudiCompany();
   const payrollColumns: ReportColumn[] = [
     { key: "empId", label: t("رقم الموظف"), width: 13 }, { key: "name", label: t("الموظف"), width: 24 },
     { key: "department", label: t("القسم"), width: 18 }, { key: "branch", label: t("الفرع"), width: 16 },
@@ -297,7 +300,7 @@ export default function HRPayrollStatement() {
     { key: "overtime", label: t("الإضافي"), width: 12 }, { key: "absenceDeduction", label: t("خصم الغياب والإجازات غير المدفوعة"), width: 16 },
     { key: "socialInsurance", label: t("التأمينات الاجتماعية (حصة الموظف)"), width: 18 }, { key: "otherDeductions", label: t("جزاءات وسلف وأخرى"), width: 16 },
     { key: "deductions", label: t("إجمالي الاستقطاعات"), width: 17 }, { key: "net", label: t("صافي الراتب"), width: 15 },
-  ];
+  ].filter((column) => gosiVisible || column.key !== "socialInsurance");
   const reportEmployees = selectedEmployees.filter((employee) => calc[employee.id]);
   const payrollRows = reportEmployees.map((employee) => {
     const c = calc[employee.id];
@@ -626,7 +629,7 @@ export default function HRPayrollStatement() {
                     <th className="px-2 py-2">{t("البدلات")}</th>
                     <th className="px-2 py-2">{t("إضافي")}</th>
                     <th className="px-2 py-2">{t("خصم الغياب والإجازات غير المدفوعة")}</th>
-                    <th className="px-2 py-2">{t("التأمينات الاجتماعية (حصة الموظف)")}</th>
+                    {gosiVisible ? <th className="px-2 py-2">{t("التأمينات الاجتماعية (حصة الموظف)")}</th> : null}
                     <th className="px-2 py-2">{t("جزاءات وسلف وأخرى")}</th>
                     <th className="px-2 py-2">{t("إجمالي الاستقطاعات")}</th>
                     <th className="px-2 py-2">{t("صافي الراتب")}</th>
@@ -634,7 +637,7 @@ export default function HRPayrollStatement() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {reportEmployees.length === 0 ? (
-                    <tr><td colSpan={14} className="py-8 text-center text-gray-400">{t("لا توجد نتائج؛ ارجع واختر الموظفين ثم اضغط اختيار الموظفين (تفصيلي)")}</td></tr>
+                    <tr><td colSpan={gosiVisible ? 14 : 13} className="py-8 text-center text-gray-400">{t("لا توجد نتائج؛ ارجع واختر الموظفين ثم اضغط اختيار الموظفين (تفصيلي)")}</td></tr>
                   ) : reportEmployees.map((emp, idx) => {
                     const c = calc[emp.id];
                     return (
@@ -649,7 +652,7 @@ export default function HRPayrollStatement() {
                         <td className="px-2 py-2" title={c.notEmployedDays ? `${t("البدلات الكاملة")} ${moneyText(c.fullAllowances)}` : undefined}>{moneyText(c.allowances)}</td>
                         <td className="px-2 py-2">{moneyText(c.overtime)}</td>
                         <td className="px-2 py-2 text-red-600" title={[c.unpaidLeaveDays ? `${t("أيام إجازة مخصومة")}: ${formatNumber(c.unpaidLeaveDays)}` : "", c.fullPeriodUnearned ? t("لم يعمل أي يوم في الفترة: خُصم أجرها كاملًا") : ""].filter(Boolean).join(" — ") || undefined}>{moneyText(c.absenceDeduction + c.unpaidLeaveDeduction)}</td>
-                        <td className="px-2 py-2 text-orange-600">{moneyText(c.socialInsurance)}</td>
+                        {gosiVisible ? <td className="px-2 py-2 text-orange-600">{moneyText(c.socialInsurance)}</td> : null}
                         <td className="px-2 py-2 text-red-600">{moneyText(c.penalties + c.loans + c.allowanceDeductions)}</td>
                         <td className="px-2 py-2 text-red-600">{moneyText(c.totalDeductions)}</td>
                         <td className="px-2 py-2 font-semibold text-emerald-700" title={c.cappedDeductions > 0 ? t("خُفّضت الاستقطاعات حتى لا يكون الصافي سالبًا") : undefined}>{moneyText(c.net)}</td>

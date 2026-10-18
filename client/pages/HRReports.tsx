@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import DynamicReport from "@/components/hr/reports/DynamicReport";
 import { reportSchemas } from "@/components/hr/reports/reportSchemas";
 import { useI18n } from "@/i18n";
+import { isSaudiCompany } from "@/lib/companyProfile";
 
 // Reports Sidebar Menu Items mapping
 const REPORT_CATEGORIES = [
@@ -48,7 +49,8 @@ export default function HRReports() {
           
           <div className="flex-1 overflow-y-auto py-2">
             <ul className="space-y-0.5">
-              {REPORT_CATEGORIES.map((category) => (
+              {/* تقرير التأمينات الاجتماعية لمنشآت السعودية فقط (S14) */}
+              {REPORT_CATEGORIES.filter((category) => isSaudiCompany() || category !== "التأمينات الاجتماعية").map((category) => (
                 <li key={category}>
                   <button
                     onClick={() => setSelectedReport(category)}

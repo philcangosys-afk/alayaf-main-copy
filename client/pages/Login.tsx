@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { useNavigate, Link, useLocation } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Eye, EyeOff, Lock, Mail, Building2 } from "lucide-react";
+import { Eye, EyeOff, Lock, Mail } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
-import { PLATFORM_NAME_AR } from "@/lib/companyProfile";
+import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authInputClass, authLabelClass, authLinkClass, authNoteClass } from "@/components/AuthShell";
 import { companyStatusMessage, loadCompanyState } from "@/lib/companyContext";
 import { buildBusinessSession } from "@/lib/businessSession";
 
@@ -105,155 +103,90 @@ export default function Login() {
   };
 
   return (
-    <div
-      className="min-h-screen flex items-center justify-center p-4"
-      dir="rtl"
-      style={{
-        background:
-          "linear-gradient(135deg, #0f172a 0%, #1e293b 40%, #0f2740 70%, #020d1a 100%)",
-      }}
+    <AuthShell
+      title="تسجيل الدخول"
+      subtitle="ادخل إلى حساب منشأتك"
+      footer={
+        <>
+          <p>
+            منشأتك غير مسجّلة؟{" "}
+            <Link to="/signup" className={authLinkClass}>سجّل منشأتك الآن</Link>
+          </p>
+          <p>
+            موظف في منشأة مسجّلة؟{" "}
+            <Link to="/employee/login" className={authLinkClass}>بوابة الموظفين</Link>
+          </p>
+        </>
+      }
     >
-      {/* Background glow */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute top-20 left-1/4 h-72 w-72 rounded-full bg-blue-500/10 blur-[120px]" />
-        <div className="absolute bottom-20 right-1/4 h-72 w-72 rounded-full bg-indigo-500/10 blur-[120px]" />
-      </div>
-
-      <div className="relative w-full max-w-md">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <div className="flex justify-center mb-5">
-            <div
-              className="relative flex h-20 w-20 items-center justify-center rounded-2xl shadow-2xl shadow-blue-500/30"
-              style={{
-                background: "linear-gradient(135deg, #2563eb, #4f46e5)",
-              }}
-            >
-              <Building2 className="h-10 w-10 text-white" />
-              <div className="absolute inset-0 rounded-2xl bg-gradient-to-tr from-white/20 to-transparent" />
-            </div>
-          </div>
-          <h1 className="text-3xl font-extrabold text-white tracking-tight leading-tight">
-            {PLATFORM_NAME_AR}
-          </h1>
-          <p className="mt-2 text-blue-200/70 text-sm">
-            تسجيل دخول المنشآت
-          </p>
+      {activated ? (
+        <div className={authNoteClass} style={{ background: AUTH_COLORS.mint, borderColor: "#BFDCCD", color: AUTH_COLORS.ink }}>
+          تم تفعيل منشأتك. سجّل الدخول للبدء.
         </div>
-
-        {/* Card */}
-        <div className="rounded-2xl bg-white/[0.04] border border-white/10 backdrop-blur-md shadow-2xl p-8 space-y-6">
-          {activated ? (
-            <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-              تم تفعيل منشأتك. سجّل الدخول للبدء.
-            </div>
-          ) : null}
-          {passwordReset ? (
-            <div className="rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
-              تم تغيير كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.
-            </div>
-          ) : null}
-          <form onSubmit={handleLogin} className="space-y-5">
-            {/* Email */}
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-white/70">
-                البريد الإلكتروني
-              </label>
-              <div className="relative">
-                <Mail className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
-                <Input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@company.com"
-                  className="pr-10 h-11 bg-white/[0.06] border-white/10 text-white placeholder:text-white/25 focus:border-blue-500/60 focus:ring-blue-500/20"
-                  disabled={loading}
-                  autoComplete="email"
-                />
-              </div>
-            </div>
-
-            {/* Password */}
-            <div className="space-y-1.5">
-              <label className="block text-sm font-medium text-white/70">
-                كلمة المرور
-              </label>
-              <div className="relative">
-                <Lock className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/30" />
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full pr-10 pl-10 h-11 rounded-lg border border-white/10 bg-white/[0.06] text-white placeholder:text-white/25 text-right focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500/60 transition"
-                  disabled={loading}
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-              <div className="text-left">
-                <button
-                  type="button"
-                  onClick={() => void handleForgotPassword()}
-                  disabled={loading || sendingReset}
-                  className="text-xs text-blue-400 hover:text-blue-300 disabled:opacity-50"
-                >
-                  {sendingReset ? "جاري الإرسال..." : "نسيت كلمة المرور؟"}
-                </button>
-              </div>
-            </div>
-
-            {/* Login Button */}
-            <Button
-              type="submit"
+      ) : null}
+      {passwordReset ? (
+        <div className={authNoteClass} style={{ background: AUTH_COLORS.mint, borderColor: "#BFDCCD", color: AUTH_COLORS.ink }}>
+          تم تغيير كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.
+        </div>
+      ) : null}
+      <form onSubmit={handleLogin} className="space-y-5" noValidate>
+        <div>
+          <label htmlFor="login-email" className={authLabelClass}>البريد الإلكتروني</label>
+          <div className="relative">
+            <Mail className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7C918A]" aria-hidden="true" />
+            <input
+              id="login-email"
+              type="email"
+              dir="ltr"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@company.com"
+              className={`${authInputClass} pr-10`}
               disabled={loading}
-              className="w-full h-12 text-[15px] font-bold rounded-xl transition shadow-lg shadow-blue-500/25"
-              style={{
-                background: "linear-gradient(135deg, #2563eb, #4f46e5)",
-              }}
-            >
-              {loading ? "جاري الدخول..." : "دخول النظام"}
-            </Button>
-          </form>
-
-          {/* New company registration */}
-          <p className="text-center text-sm text-white/40">
-            منشأة جديدة؟{" "}
-            <Link
-              to="/signup"
-              className="text-blue-400 hover:text-blue-300 font-medium"
-            >
-              سجّل منشأتك
-            </Link>
-          </p>
-
-          {/* Switch to employee portal */}
-          <p className="text-center text-sm text-white/40">
-            هل أنت موظف؟{" "}
-            <Link
-              to="/employee/login"
-              className="text-blue-400 hover:text-blue-300 font-medium"
-            >
-              بوابة الموظفين
-            </Link>
-          </p>
+              autoComplete="email"
+            />
+          </div>
         </div>
 
-        {/* Footer */}
-        <p className="text-center mt-6 text-xs text-white/20">
-          © {new Date().getFullYear()} {PLATFORM_NAME_AR} · جميع الحقوق محفوظة
-        </p>
-      </div>
-    </div>
+        <div>
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <label htmlFor="login-password" className="text-[14px] font-medium text-[#24443A]">كلمة المرور</label>
+            <button
+              type="button"
+              onClick={() => void handleForgotPassword()}
+              disabled={loading || sendingReset}
+              className={`text-[13px] ${authLinkClass} disabled:opacity-50`}
+            >
+              {sendingReset ? "جاري الإرسال..." : "نسيت كلمة المرور؟"}
+            </button>
+          </div>
+          <div className="relative">
+            <Lock className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7C918A]" aria-hidden="true" />
+            <input
+              id="login-password"
+              type={showPassword ? "text" : "password"}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className={`${authInputClass} pr-10 pl-11`}
+              disabled={loading}
+              autoComplete="current-password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              aria-label={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+              className="absolute left-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-[#7C918A] hover:text-[#24443A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#14775A]/40"
+            >
+              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" disabled={loading} className={authButtonClass} style={authButtonStyle}>
+          {loading ? "جاري الدخول..." : "دخول"}
+        </button>
+      </form>
+    </AuthShell>
   );
 }

@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
 import { KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
-import AuthShell, { authButtonStyle, authInputClass, authLabelClass } from "@/components/AuthShell";
+import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authInputClass, authLabelClass, authLinkClass } from "@/components/AuthShell";
 
 type Phase = "checking" | "ready" | "invalid";
 
@@ -100,14 +99,12 @@ export default function ResetPassword() {
 
   if (phase === "invalid") {
     return (
-      <AuthShell subtitle="تعيين كلمة مرور جديدة">
-        <div className="text-center space-y-4 text-white">
-          <KeyRound className="mx-auto h-12 w-12 text-rose-300" />
-          <p className="text-lg font-bold">الرابط غير صالح أو انتهت صلاحيته</p>
-          <p className="text-sm text-white/70 leading-7">
+      <AuthShell title="الرابط غير صالح أو انتهت صلاحيته" footer={<p><Link to="/login" className={authLinkClass}>الذهاب إلى تسجيل الدخول</Link></p>}>
+        <div className="flex items-start gap-4">
+          <KeyRound className="mt-1 h-9 w-9 shrink-0 text-[#B42318]" aria-hidden="true" />
+          <p className="text-[15px] leading-8" style={{ color: AUTH_COLORS.text }}>
             اطلب رابطًا جديدًا من صفحة الدخول بالضغط على «نسيت كلمة المرور؟»، واستخدم أحدث رسالة تصلك.
           </p>
-          <Link to="/login" className="inline-block text-blue-400 hover:text-blue-300 font-medium">الذهاب إلى تسجيل الدخول</Link>
         </div>
       </AuthShell>
     );
@@ -115,31 +112,34 @@ export default function ResetPassword() {
 
   if (phase === "checking") {
     return (
-      <AuthShell subtitle="تعيين كلمة مرور جديدة">
-        <p className="text-center text-sm text-white/70">جاري التحقق من الرابط...</p>
+      <AuthShell title="تعيين كلمة مرور جديدة">
+        <p className="text-[15px]" style={{ color: AUTH_COLORS.muted }}>جاري التحقق من الرابط...</p>
       </AuthShell>
     );
   }
 
   return (
-    <AuthShell subtitle="تعيين كلمة مرور جديدة">
+    <AuthShell
+      title="تعيين كلمة مرور جديدة"
+      subtitle={email ? undefined : "اختر كلمة مرور جديدة لحسابك"}
+    >
       {email ? (
-        <p className="text-center text-sm text-white/60">
-          الحساب: <span dir="ltr" className="font-mono text-white/80">{email}</span>
+        <p className="text-[14px]" style={{ color: AUTH_COLORS.muted }}>
+          الحساب: <span dir="ltr" className="font-semibold" style={{ color: AUTH_COLORS.text }}>{email}</span>
         </p>
       ) : null}
       <form onSubmit={submit} className="space-y-5">
         <div>
-          <label className={authLabelClass}>كلمة المرور الجديدة</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className={authInputClass} placeholder="8 أحرف على الأقل" disabled={saving} autoComplete="new-password" />
+          <label htmlFor="reset-password" className={authLabelClass}>كلمة المرور الجديدة</label>
+          <input id="reset-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className={authInputClass} placeholder="8 أحرف على الأقل" disabled={saving} autoComplete="new-password" />
         </div>
         <div>
-          <label className={authLabelClass}>تأكيد كلمة المرور</label>
-          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={authInputClass} disabled={saving} autoComplete="new-password" />
+          <label htmlFor="reset-confirm" className={authLabelClass}>تأكيد كلمة المرور</label>
+          <input id="reset-confirm" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={authInputClass} disabled={saving} autoComplete="new-password" />
         </div>
-        <Button type="submit" disabled={saving} className="w-full h-12 text-[15px] font-bold rounded-xl shadow-lg shadow-blue-500/25" style={authButtonStyle}>
+        <button type="submit" disabled={saving} className={authButtonClass} style={authButtonStyle}>
           {saving ? "جاري الحفظ..." : "حفظ كلمة المرور"}
-        </Button>
+        </button>
       </form>
     </AuthShell>
   );

@@ -15,6 +15,7 @@ import { computePayroll, savePayrollRows, type PayrollComputation } from "@/lib/
 import PayrollApprovalDialog from "@/components/hr/PayrollApprovalDialog";
 import PayrollFreshnessNotice from "@/components/hr/PayrollFreshnessNotice";
 import { freshnessErrorText, savedPayrollFreshness, type PayrollFreshness } from "@/lib/payrollFreshness";
+import { isSaudiCompany } from "@/lib/companyProfile";
 
 type ReportConfig = {
   period: string;
@@ -80,6 +81,8 @@ export default function HRPayrollFullReport() {
   const [reloadKey, setReloadKey] = useState(0);
   const [showColumns, setShowColumns] = useState(false);
   const [visible, setVisible] = useState<Record<string, boolean>>(() => Object.fromEntries(columns.map((column) => [column.key, column.defaultVisible !== false])));
+  // عمود التأمينات الاجتماعية لمنشآت السعودية فقط (S14)
+  const availableColumns = isSaudiCompany() ? columns : columns.filter((column) => column.key !== "socialInsurance");
   const [filterNames, setFilterNames] = useState({ branch: "الكل", department: "الكل", section: "الكل", location: "الكل" });
   // مطابقة الرواتب المحفوظة (طلب الاعتماد) مع الحساب الآن: غياب أو جزاء أُدخل بعد الإرسال
   const [freshness, setFreshness] = useState<PayrollFreshness | null>(null);
@@ -155,7 +158,7 @@ export default function HRPayrollFullReport() {
     void load();
   }, [config, t, reloadKey]);
 
-  const visibleColumns = columns.filter((column) => visible[column.key]);
+  const visibleColumns = availableColumns.filter((column) => visible[column.key]);
   const groups = visibleColumns.reduce<Array<{ name: string; count: number }>>((result, column) => { const last = result[result.length - 1]; if (last?.name === column.group) last.count += 1; else result.push({ name: column.group, count: 1 }); return result; }, []);
   const totals = Object.fromEntries(columns.filter((column) => column.money).map((column) => [column.key, rows.reduce((sum, row) => sum + Number(row[column.key] ?? 0), 0)]));
   const monthLabel = config?.period ? formatDate(`${config.period}-01`, { month: "long" }) : "-";
@@ -270,7 +273,7 @@ export default function HRPayrollFullReport() {
       </header>
       <div className="overflow-x-auto"><table className="min-w-max border-collapse text-[10px]"><thead><tr className="bg-[#075f94] text-white">{groups.map((group) => <th key={group.name} colSpan={group.count} className="border border-white/30 px-2 py-2 text-center font-bold">{t(group.name)}</th>)}</tr><tr className="bg-[#0b6fa4] text-white">{visibleColumns.map((column) => <th key={column.key} className="max-w-32 whitespace-normal border border-white/30 px-2 py-2 text-center font-semibold">{t(column.label)}</th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={visibleColumns.length} className="py-16 text-center text-slate-400">{t("جاري التحميل...")}</td></tr> : rows.map((row) => <tr key={row.id} className="odd:bg-white even:bg-slate-50">{visibleColumns.map((column) => <td key={column.key} className={`border border-slate-200 px-2 py-2 text-center ${column.money && Number(row[column.key]) > 0 ? "font-medium" : ""}`}>{formatCell(column, row[column.key])}</td>)}</tr>)}</tbody>{!loading && rows.length > 0 && <tfoot><tr className="bg-sky-50 font-bold"><td colSpan={Math.max(1, visibleColumns.findIndex((column) => column.money))} className="border border-slate-300 px-2 py-3 text-center">{t("الإجماليات")}</td>{visibleColumns.slice(Math.max(1, visibleColumns.findIndex((column) => column.money))).map((column) => <td key={column.key} className="border border-slate-300 px-2 py-3 text-center">{column.money ? formatNumber(Number(totals[column.key] ?? 0), { minimumFractionDigits: 2 }) : ""}</td>)}</tr></tfoot>}</table></div>
     </section>
-    {showColumns && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowColumns(false)}><div className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b p-5"><h2 className="text-xl font-bold">{t("إظهار/إخفاء الأعمدة")}</h2><button onClick={() => setShowColumns(false)}><X className="h-5 w-5" /></button></div><div className="grid gap-3 p-6 sm:grid-cols-2 lg:grid-cols-3">{columns.map((column) => <label key={column.key} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3 text-sm"><span>{t(column.label)}</span><input type="checkbox" checked={visible[column.key]} onChange={(event) => setVisible((current) => ({ ...current, [column.key]: event.target.checked }))} className="h-5 w-5 accent-[#075f94]" /></label>)}</div><div className="flex justify-end border-t p-4"><Button onClick={() => setShowColumns(false)} className="bg-[#075f94]">{t("تطبيق")}</Button></div></div></div>}
+    {showColumns && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowColumns(false)}><div className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl bg-white shadow-2xl" onClick={(event) => event.stopPropagation()}><div className="flex items-center justify-between border-b p-5"><h2 className="text-xl font-bold">{t("إظهار/إخفاء الأعمدة")}</h2><button onClick={() => setShowColumns(false)}><X className="h-5 w-5" /></button></div><div className="grid gap-3 p-6 sm:grid-cols-2 lg:grid-cols-3">{availableColumns.map((column) => <label key={column.key} className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border p-3 text-sm"><span>{t(column.label)}</span><input type="checkbox" checked={visible[column.key]} onChange={(event) => setVisible((current) => ({ ...current, [column.key]: event.target.checked }))} className="h-5 w-5 accent-[#075f94]" /></label>)}</div><div className="flex justify-end border-t p-4"><Button onClick={() => setShowColumns(false)} className="bg-[#075f94]">{t("تطبيق")}</Button></div></div></div>}
     <PayrollApprovalDialog
       open={approvalOpen}
       period={config.period}

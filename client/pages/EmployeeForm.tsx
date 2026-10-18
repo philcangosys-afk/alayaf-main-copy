@@ -8,6 +8,7 @@ import { INACTIVE_EMPLOYEE_STATUSES, setEmployeeLoginState } from "@/components/
 import { employeeErrorText } from "@/components/hr/employeeErrors";
 import { GOSI_TYPE_GCC, gosiTypesFor, isGccNationality, isNewSystemType } from "@/lib/gosi";
 import { isSaudiNationality } from "@/lib/hrStatus";
+import { isSaudiCompany } from "@/lib/companyProfile";
 
 export { employeeErrorText };
 import {
@@ -397,12 +398,15 @@ const validateEmployeeForm = (form: EmpFormData, mode: "create" | "edit", initia
   const check = <K extends keyof EmpFormData>(key: K) => isCreate || changed(key);
   const nationalId = normalizeDigits(form.nationalId.trim());
   const phone = normalizeDigits(form.phone.replace(/[\s-]/g, ""));
+  // صيغ الهوية السعودية والآيبان السعودي والتأمينات الاجتماعية لمنشآت السعودية فقط (S14)
+  const saudiCompany = isSaudiCompany();
 
   need(0, "name", "الاسم الكامل بالعربي مطلوب");
   need(0, "gender", "الجنس مطلوب");
   need(0, "nationality", "الجنسية مطلوبة");
   need(0, "nationalId", "رقم الهوية / الإقامة مطلوب");
-  if (nationalId && check("nationalId") && !/^[1-4]\d{9}$/.test(nationalId)) add(0, "رقم الهوية / الإقامة / الحدود يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2 أو 3 أو 4");
+  if (saudiCompany && nationalId && check("nationalId") && !/^[1-4]\d{9}$/.test(nationalId)) add(0, "رقم الهوية / الإقامة / الحدود يجب أن يكون 10 أرقام ويبدأ بـ 1 أو 2 أو 3 أو 4");
+  if (!saudiCompany && nationalId && check("nationalId") && !/^[A-Za-z0-9-]{4,30}$/.test(nationalId)) add(0, "رقم الهوية / الإقامة من 4 إلى 30 حرفًا لاتينيًا أو رقمًا (ويُقبل -، بلا مسافات)");
   need(0, "phone", "رقم الجوال مطلوب");
   if (phone && check("phone") && !/^(05\d{8}|\+?\d{8,15})$/.test(phone)) add(0, "رقم الجوال غير صحيح (مثال: 05xxxxxxxx أو رقم دولي)");
   if (form.email.trim() && check("email") && !EMAIL_PATTERN.test(form.email.trim())) add(0, "البريد الإلكتروني غير صحيح");
@@ -438,22 +442,23 @@ const validateEmployeeForm = (form: EmpFormData, mode: "create" | "edit", initia
   if ((check("allowances") || check("baseSalary")) && computeTotalSalary(form.baseSalary, form.allowances) < 0) {
     add(2, "إجمالي الراتب بعد البدلات المخصومة سالب");
   }
-  if (form.socialInsurance === "نعم" && (check("socialInsurance") || check("socialInsuranceType") || check("socialInsuranceStartDate"))) {
+  if (saudiCompany && form.socialInsurance === "نعم" && (check("socialInsurance") || check("socialInsuranceType") || check("socialInsuranceStartDate"))) {
     if (!form.socialInsuranceType) add(2, "نوع التأمينات الاجتماعية مطلوب");
     if (!form.socialInsuranceStartDate) add(2, "تاريخ الاشتراك في التأمينات مطلوب");
   }
   // نوع التأمين يناسب الجنسية (يُفحص عند تغيير الجنسية أو التأمينات أو نوعها، فلا يمنع حفظ سجل قديم لم تُمس هذه الحقول فيه)
-  if (form.socialInsurance === "نعم" && form.socialInsuranceType
+  if (saudiCompany && form.socialInsurance === "نعم" && form.socialInsuranceType
       && (check("nationality") || check("socialInsurance") || check("socialInsuranceType"))
       && !gosiTypesFor(form.nationality).includes(form.socialInsuranceType)) {
     add(2, `نوع التأمين لا يناسب الجنسية؛ المتاح لهذه الجنسية: ${gosiTypesFor(form.nationality).map((type) => `«${type}»`).join(" أو ")}`);
   }
   // النظام الجديد لمن سُجّل في التأمينات أول مرة من 3 يوليو 2024؛ الاشتراك قبله يعني النظام السابق
-  if (form.socialInsurance === "نعم" && isNewSystemType(form.socialInsuranceType) && form.socialInsuranceStartDate
+  if (saudiCompany && form.socialInsurance === "نعم" && isNewSystemType(form.socialInsuranceType) && form.socialInsuranceStartDate
       && (check("socialInsuranceType") || check("socialInsuranceStartDate")) && form.socialInsuranceStartDate < NEW_SYSTEM_START) {
     add(2, "النظام الجديد للتأمينات لمن سُجّل أول مرة من 3 يوليو 2024؛ تاريخ الاشتراك قبله يعني النظام السابق (النوع بلا «النظام الجديد»)");
   }
-  if (form.iban && check("iban") && !/^SA\d{22}$/.test(form.iban.toUpperCase().replace(/\s/g, ""))) add(2, "رقم الآيبان يجب أن يبدأ بـ SA ويتبعه 22 رقمًا");
+  if (saudiCompany && form.iban && check("iban") && !/^SA\d{22}$/.test(form.iban.toUpperCase().replace(/\s/g, ""))) add(2, "رقم الآيبان يجب أن يبدأ بـ SA ويتبعه 22 رقمًا");
+  if (!saudiCompany && form.iban && check("iban") && !/^[A-Z]{2}\d{2}[A-Z0-9]{10,30}$/.test(form.iban.toUpperCase().replace(/\s/g, ""))) add(2, "رقم الآيبان غير صحيح: حرفان لرمز الدولة ثم رقمان ثم رقم الحساب");
 
   if (form.password) {
     if (!form.email.trim()) add(6, "إنشاء حساب دخول يتطلب بريدًا إلكترونيًا في الخطوة الأولى");
@@ -1094,7 +1099,7 @@ function Step1Personal({
       {/* Row 5: Marital / National ID */}
       <div className="grid grid-cols-2 gap-4">
         <FSelect label="الحالة الاجتماعية" value={form.maritalStatus} onChange={(v) => set("maritalStatus", v)} options={MARITAL_STATUSES} placeholder="--" />
-        <FInput label="رقم الهوية / الإقامة *" value={form.nationalId} onChange={(v) => set("nationalId", v)} placeholder="1xxxxxxxxx / 2xxxxxxxxx" />
+        <FInput label="رقم الهوية / الإقامة *" value={form.nationalId} onChange={(v) => set("nationalId", v)} placeholder={isSaudiCompany() ? "1xxxxxxxxx / 2xxxxxxxxx" : ""} />
       </div>
 
       {/* Row 6: Work Contact Type / ID Expiry */}
@@ -1396,7 +1401,8 @@ function Step3Financial({ form, set }: { form: EmpFormData; set: <K extends keyo
         </div>
       </div>
 
-      {/* Insurance Info */}
+      {/* Insurance Info: التأمينات الاجتماعية السعودية لمنشآت السعودية فقط (S14) */}
+      {isSaudiCompany() ? (
       <div>
         <h3 className="text-sm font-semibold text-gray-800 mb-3">{t("معلومات التأمين")}</h3>
         <div className="space-y-4">
@@ -1459,6 +1465,7 @@ function Step3Financial({ form, set }: { form: EmpFormData; set: <K extends keyo
           )}
         </div>
       </div>
+      ) : null}
 
       {/* Bank Info */}
       <div>
@@ -1467,7 +1474,7 @@ function Step3Financial({ form, set }: { form: EmpFormData; set: <K extends keyo
           <FInput label="اسم الحساب البنكي" value={form.bankName} onChange={(v) => set("bankName", v)} />
           <FInput label="اسم الفرع" value={form.bankBranch} onChange={(v) => set("bankBranch", v)} />
           <FInput label="رقم الحساب" value={form.bankAccount} onChange={(v) => set("bankAccount", v)} />
-          <FInput label="رقم الآيبان" value={form.iban} onChange={(v) => set("iban", v.toUpperCase().replace(/\s/g, ""))} placeholder="SA0000000000000000000000" />
+          <FInput label="رقم الآيبان" value={form.iban} onChange={(v) => set("iban", v.toUpperCase().replace(/\s/g, ""))} placeholder={isSaudiCompany() ? "SA0000000000000000000000" : ""} />
         </div>
       </div>
     </div>

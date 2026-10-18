@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import { checkPerm, permissionForHRPath, permissionForMainPath, permissionForMainSubPath, readUserSession } from "@/lib/authSession";
 import { useCompany } from "@/lib/companyContext";
+import { isSaudiCompany, isSaudiOnlyPath } from "@/lib/companyProfile";
 import { buildBusinessSession } from "@/lib/businessSession";
 import { toast } from "sonner";
 
@@ -129,6 +130,8 @@ export default function RequireAuth() {
     const mainKey = permissionForMainPath(location.pathname);
     const keys = location.pathname.startsWith("/hr") ? permissionForHRPath(location.pathname) : permissionForMainSubPath(location.pathname);
     if (mainKey && !checkPerm(permissions, ...keys)) return <Navigate to="/" replace />;
+    // الصفحات السعودية (الهيئة والتأمينات والإقرار الضريبي) لمنشآت السعودية فقط (S14)
+    if (isSaudiOnlyPath(location.pathname) && !isSaudiCompany(company.company?.country)) return <Navigate to="/" replace />;
   }
 
   return <Outlet />;

@@ -55,7 +55,8 @@ import {
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import ReadOnlyBoundary from "@/components/permissions/ReadOnlyBoundary";
 import { useI18n } from "@/i18n";
-import { COMPANY_PROFILE } from "@/lib/companyProfile";
+import { COMPANY_PROFILE, isBillingPath, isSaudiCompany, isSaudiOnlyPath } from "@/lib/companyProfile";
+import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
 
 /** اسم المنشأة بلغة الواجهة: الإنجليزي في الواجهة الإنجليزية إن وُجد، وإلا العربي */
 const companyDisplayName = (locale: string) =>
@@ -118,6 +119,7 @@ const navSubMenus: Record<
   "/expenses": [
     { label: "الحسابات البنكية", href: "/expenses/bank-accounts" },
     { label: "القيود اليدوية", href: "/expenses/manual-journals" },
+    { label: "ترحيل الرواتب", href: "/expenses/payroll-posting" },
     { label: "إعادة التصنيف الجماعي", href: "/expenses/reclassification" },
     { label: "شجرة الحسابات", href: "/expenses" },
     { label: "الأصول الثابتة", href: "/expenses/fixed-assets" },
@@ -638,28 +640,30 @@ function HRSidebar({
   const userSession = readUserSession();
   const { permissions: livePerms } = useRolePermissions();
   const { t } = useI18n();
+  // الأنظمة السعودية (التأمينات الاجتماعية) لمنشآت السعودية فقط (S14)
+  const saudi = isSaudiCompany(useCompany().company?.country);
   const allowedHRItems = useMemo(() => {
     return hrNavItems
       .filter((item) => {
         if (item.isHeader) return true;
         if (item.hasChildren && item.children) {
           return item.children.some((c) =>
-            checkPerm(livePerms, ...permissionForHRPath(c.href)),
+            checkPerm(livePerms, ...permissionForHRPath(c.href)) && (saudi || !isSaudiOnlyPath(c.href)),
           );
         }
-        return checkPerm(livePerms, ...permissionForHRPath(item.href));
+        return checkPerm(livePerms, ...permissionForHRPath(item.href)) && (saudi || !isSaudiOnlyPath(item.href));
       })
       .map((item) =>
         item.hasChildren && item.children
           ? {
               ...item,
               children: item.children.filter((c) =>
-                checkPerm(livePerms, ...permissionForHRPath(c.href)),
+                checkPerm(livePerms, ...permissionForHRPath(c.href)) && (saudi || !isSaudiOnlyPath(c.href)),
               ),
             }
           : item,
       );
-  }, [livePerms]);
+  }, [livePerms, saudi]);
 
   // Restore scroll position on mount
   useEffect(() => {
@@ -1001,6 +1005,8 @@ function MainSidebar({
   const userSession = readUserSession();
   const { permissions: livePerms } = useRolePermissions();
   const { t, locale } = useI18n();
+  // الإقرار الضريبي السعودي لمنشآت السعودية فقط (S14)
+  const saudiCompany = isSaudiCompany(useCompany().company?.country);
 
   // Restore scroll position on mount
   useEffect(() => {
@@ -1168,7 +1174,7 @@ function MainSidebar({
           const subItems = navSubMenus[item.href]?.filter(
             (subItem) =>
               subItem.isHeader ||
-              checkPerm(livePerms, ...permissionForMainSubPath(subItem.href)),
+              (checkPerm(livePerms, ...permissionForMainSubPath(subItem.href)) && (saudiCompany || !isSaudiOnlyPath(subItem.href))),
           );
           const colors = itemColors[item.href] || itemColors["/"];
 
@@ -1374,7 +1380,11 @@ function MainSidebar({
    ═══════════════════════════════════════════════════════ */
 export default function Layout({ children }: LayoutProps) {
   // يعيد رسم الإطار عند تعديل بيانات المنشأة (الاسم/الشعار)
-  useCompany();
+  const company = useCompany();
+  const outsideSaudi = Boolean(company.company) && !isSaudiCompany(company.company?.country);
+  const [countryNoteHidden, setCountryNoteHidden] = useState(() => {
+    try { return sessionStorage.getItem(`country-note-hidden-${company.company?.code ?? ""}`) === "1"; } catch { return false; }
+  });
   const location = useLocation();
   const { permissions: livePerms } = useRolePermissions();
   const { t, direction, formatDate, locale } = useI18n();
@@ -1476,6 +1486,26 @@ export default function Layout({ children }: LayoutProps) {
         </header>
 
         <QuickActionsBar />
+
+        {/* منشأة خارج السعودية (S14): الأنظمة السعودية مخفية، والفوترة والضريبة حسب الدولة قادمة.
+            في صفحات الفواتير والإشعارات يظهر التنبيه دائمًا (الخادم يرفض حفظها) */}
+        {outsideSaudi && isBillingPath(location.pathname) ? (
+          <div role="note" className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-[13px] font-medium leading-6 text-amber-900">
+            {t(BILLING_COUNTRY_MESSAGE)}
+          </div>
+        ) : outsideSaudi && !countryNoteHidden ? (
+          <div className="mx-4 mt-3 flex items-start justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-[13px] leading-6 text-emerald-900">
+            <span>{t("منشأتك خارج السعودية: لا تظهر لها الأنظمة السعودية (الفوترة الإلكترونية للهيئة، والتأمينات الاجتماعية، والإقرار الضريبي والزكاة). الفوترة (فواتير المبيعات والمشتريات وإشعاراتها) والضريبة بالنسبة التي تحددها حسب دولتك تُفعَّل في تحديث قادم.")}</span>
+            <button
+              type="button"
+              onClick={() => { setCountryNoteHidden(true); try { sessionStorage.setItem(`country-note-hidden-${company.company?.code ?? ""}`, "1"); } catch { /* تخزين الجلسة غير متاح */ } }}
+              className="shrink-0 rounded px-2 text-emerald-800 hover:bg-emerald-100"
+              aria-label={t("إخفاء التنبيه")}
+            >
+              ×
+            </button>
+          </div>
+        ) : null}
 
         {/* Page Content */}
         <div className="flex-1 overflow-auto p-4">
