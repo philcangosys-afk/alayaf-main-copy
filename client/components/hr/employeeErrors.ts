@@ -23,6 +23,11 @@ const EMPLOYEE_ERROR_MESSAGES: Record<string, string> = {
   EMPLOYEE_EMAIL_LOCKED_WHILE_LOGIN_LINKED: "البريد مرتبط بحساب دخول الموظف؛ يغيّره مدير النظام من زر «تغيير البريد» في بيانات الموظف",
   EMAIL_NOT_AVAILABLE: "هذا البريد غير متاح؛ استخدم بريدًا مختلفًا للموظف",
   AUTH_LINK_REQUIRES_SERVER: "ربط حساب الدخول يتم من الخادم فقط",
+  // S15: الاشتراك
+  SUBSCRIPTION_READ_ONLY: "المنشأة في وضع القراءة فقط حتى تفعيل الاشتراك؛ لا يمكن الإضافة أو التعديل (يُسمح فقط بتعطيل موظف)",
+  PLAN_LIMIT_EMPLOYEES: "بلغت المنشأة حد الموظفين الفعّالين في باقتها؛ رقِّ الباقة من صفحة «الاشتراك» أو عطّل موظفًا",
+  PLAN_LIMIT_USERS: "بلغت المنشأة حد المستخدمين في باقتها؛ رقِّ الباقة من صفحة «الاشتراك» أو عطّل حسابًا آخر",
+  SUBSCRIPTION_LAST_ADMIN: "لا يُعطَّل آخر مدير نظام فعّال والمنشأة للقراءة فقط؛ يحتاجه طلب الاشتراك",
 };
 
 export const employeeErrorText = (error: unknown, fallback = "حدث خطأ أثناء الحفظ") => {

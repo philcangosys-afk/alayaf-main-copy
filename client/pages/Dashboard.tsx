@@ -8,6 +8,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { selectAllRows } from "@/lib/ledgerData";
 import { useI18n } from "@/i18n";
 import { PENDING_STATUSES } from "@/lib/hrStatus";
+import SubscriptionCard from "@/components/subscription/SubscriptionCard";
 import {
   TrendingUp,
   TrendingDown,
@@ -217,6 +218,9 @@ export default function Dashboard() {
           </div>
         </div>
       </section>
+
+      {/* ── S15: الاشتراك والفترة التجريبية ── */}
+      <SubscriptionCard />
 
       {/* ── KPIs Grid ── */}
       <section className="mb-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4 stagger-children">

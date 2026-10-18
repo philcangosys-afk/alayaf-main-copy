@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { applyCompanyProfile, type CompanyRecord, type CompanyStatus, type LastRejection, type MyCompanyResult } from "@/lib/companyProfile";
+import { SUBSCRIPTION_ERROR_EVENT, type SubscriptionInfo } from "@/lib/subscription";
 
 /**
  * حالة المنشأة للمستخدم الحالي (نظام الشركات).
@@ -15,6 +16,8 @@ export type CompanyState = {
   memberRole: "owner" | "member" | null;
   company: CompanyRecord | null;
   lastRejection: LastRejection | null;
+  /** S15: اشتراك المنشأة (التجربة، الباقة، القراءة فقط). null قبل التحميل أو إن لم تُطبَّق S15 بعد */
+  subscription: SubscriptionInfo | null;
   /** حساب الدخول الذي حُمّلت له الحالة */
   userId: string | null;
   error: string;
@@ -32,6 +35,7 @@ const initialState: CompanyState = {
   memberRole: null,
   company: null,
   lastRejection: null,
+  subscription: null,
   userId: null,
   error: "",
 };
@@ -48,9 +52,17 @@ function toState(result: MyCompanyResult | null, userId: string | null): Company
     memberRole: (result?.member_role as "owner" | "member" | undefined) ?? null,
     company,
     lastRejection: result?.last_rejection ?? null,
+    subscription: null,
     userId,
     error: "",
   };
+}
+
+/** S15: اشتراك المنشأة الفعّالة. خطأ القراءة (أو S15 غير مطبّق) لا يوقف النظام: يبقى بلا تنبيه */
+async function loadSubscription(): Promise<SubscriptionInfo | null> {
+  const { data, error } = await supabase.rpc("my_subscription");
+  if (error || !data || typeof data !== "object") return null;
+  return data as SubscriptionInfo;
 }
 
 /** قراءة حالة المنشأة من قاعدة البيانات (تُستخدم أيضًا مباشرة في صفحات الدخول) */
@@ -68,6 +80,7 @@ export async function loadCompanyState(): Promise<CompanyState> {
   }
   const state = toState((data ?? null) as MyCompanyResult | null, userId);
   applyCompanyProfile(state.status === "active" ? state.company : null);
+  if (state.status === "active") state.subscription = await loadSubscription();
   return state;
 }
 
@@ -108,6 +121,23 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
       }
     });
     return () => sub.subscription.unsubscribe();
+  }, [refresh]);
+
+  // S15: رفض الخادم عملية بسبب الاشتراك (انتهت التجربة أثناء العمل مثلًا): تُحدَّث الحالة ليظهر التنبيه
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onSubscriptionError = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void refresh();
+      }, 400);
+    };
+    window.addEventListener(SUBSCRIPTION_ERROR_EVENT, onSubscriptionError);
+    return () => {
+      window.removeEventListener(SUBSCRIPTION_ERROR_EVENT, onSubscriptionError);
+      if (timer) clearTimeout(timer);
+    };
   }, [refresh]);
 
   const value = useMemo(() => ({ ...state, refresh }), [state, refresh]);

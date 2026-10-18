@@ -4,6 +4,7 @@
  * تعيد null إن لم تُعرف الرسالة، ليقرر المستدعي ما يعرضه.
  */
 import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
+import { SUBSCRIPTION_ERROR_MESSAGES, subscriptionErrorCode } from "@/lib/subscription";
 
 const UNIQUE_MESSAGES: Array<[string, string]> = [
   ["inventory_warehouses_code_key", "رمز المستودع مستخدم لمستودع آخر في المنشأة."],
@@ -20,6 +21,9 @@ const UNIQUE_MESSAGES: Array<[string, string]> = [
 
 export function dbErrorText(message: string): string | null {
   const text = String(message ?? "");
+  // S15: القراءة فقط وحدود الباقة
+  const subscription = subscriptionErrorCode(text);
+  if (subscription) return SUBSCRIPTION_ERROR_MESSAGES[subscription];
   if (/duplicate key value|unique constraint/i.test(text)) {
     for (const [key, value] of UNIQUE_MESSAGES) if (text.includes(key)) return value;
     return "القيمة مستخدمة لسجل آخر في المنشأة.";

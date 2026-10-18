@@ -126,6 +126,8 @@ import AccountingReports from "./pages/AccountingReports";
 import AccountantWorkspace from "./pages/AccountantWorkspace";
 import AIAssistant from "./pages/AIAssistant";
 import Settings from "./pages/Settings";
+import Subscription from "./pages/Subscription";
+import SubscriptionErrorDialog from "./components/subscription/SubscriptionErrorDialog";
 import ZATCASettings from "./pages/ZATCASettings";
 import NotFound from "./pages/NotFound";
 import TasksProjects from "./pages/TasksProjects";
@@ -342,6 +344,7 @@ const App = () => (
           <Route path="/ai" element={<AIAssistant />} />
           <Route path="/ai/assistant" element={<AIAssistant />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/subscription" element={<Subscription />} />
           <Route path="/zatca/settings" element={<ZATCASettings />} />
           <Route path="/tasks-projects" element={<TasksProjects />} />
 
@@ -349,6 +352,7 @@ const App = () => (
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+        <SubscriptionErrorDialog />
         </CompanyProvider>
       </BrowserRouter>
       </TooltipProvider>

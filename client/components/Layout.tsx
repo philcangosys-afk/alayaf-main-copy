@@ -57,6 +57,8 @@ import ReadOnlyBoundary from "@/components/permissions/ReadOnlyBoundary";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE, isBillingPath, isSaudiCompany, isSaudiOnlyPath } from "@/lib/companyProfile";
 import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
+import { isReadOnlySubscription } from "@/lib/subscription";
+import SubscriptionBanner from "@/components/subscription/SubscriptionBanner";
 
 /** اسم المنشأة بلغة الواجهة: الإنجليزي في الواجهة الإنجليزية إن وُجد، وإلا العربي */
 const companyDisplayName = (locale: string) =>
@@ -603,6 +605,15 @@ const itemColors: Record<
     subBg: "bg-fuchsia-500/[0.06]",
     border: "border-fuchsia-400/20",
   },
+  "/subscription": {
+    icon: "from-amber-400 to-yellow-600",
+    active: "bg-amber-500/15 border-amber-500/25",
+    glow: "shadow-amber-500/20",
+    dot: "bg-amber-400",
+    text: "text-amber-300",
+    subBg: "bg-amber-500/[0.06]",
+    border: "border-amber-400/20",
+  },
   "/settings": {
     icon: "from-slate-400 to-gray-600",
     active: "bg-slate-500/15 border-slate-500/25",
@@ -1057,6 +1068,7 @@ function MainSidebar({
     { icon: Boxes, label: "المخزون", href: "/inventory", hasSubmenu: true },
     { icon: Truck, label: "الأسطول والسيارات", href: "/fleet", hasSubmenu: true },
     { icon: Bot, label: "الذكاء الاصطناعي", href: "/ai", hasSubmenu: true },
+    { icon: Crown, label: "الاشتراك", href: "/subscription" },
     { icon: Settings, label: "الإعدادات", href: "/settings" },
   ];
   const navItems = useMemo(() => {
@@ -1425,6 +1437,10 @@ export default function Layout({ children }: LayoutProps) {
   const readOnly =
     checkPerm(livePerms, ...currentPermissionKeys) &&
     !canManagePerm(livePerms, ...currentPermissionKeys);
+  // S15: انتهت التجربة أو الاشتراك: كل الصفحات للقراءة فقط، عدا صفحة الاشتراك (طلب الباقة)
+  // وإعدادات الهيئة (الربط وتجديد الشهادة) تبقى متاحة: جداولها مستثناة في الخادم
+  const subscriptionReadOnly =
+    isReadOnlySubscription(company.subscription) && !location.pathname.startsWith("/subscription") && !location.pathname.startsWith("/zatca");
 
   return (
     <div
@@ -1507,9 +1523,13 @@ export default function Layout({ children }: LayoutProps) {
           </div>
         ) : null}
 
+        <SubscriptionBanner />
+
         {/* Page Content */}
         <div className="flex-1 overflow-auto p-4">
-          <ReadOnlyBoundary readOnly={readOnly}>{children}</ReadOnlyBoundary>
+          <ReadOnlyBoundary readOnly={readOnly || subscriptionReadOnly} reason={!readOnly && subscriptionReadOnly ? "subscription" : "permission"}>
+            {children}
+          </ReadOnlyBoundary>
         </div>
       </main>
     </div>

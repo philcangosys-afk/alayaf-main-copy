@@ -37,6 +37,15 @@ const adminRoles = new Set(["مدير النظام", "مدير عام", "الم�
 const inactiveStatuses = new Set(["غير فعال", "غير نشط", "منتهي", "منتهية", "منتهي الخدمة", "مستقيل", "مفصول", "موقوف", "inactive", "terminated"]);
 const isInactive = (status: unknown) => inactiveStatuses.has(String(status ?? "").trim().toLowerCase());
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// S15: الاشتراك (القراءة فقط وحد المستخدمين في الباقة)
+const SUBSCRIPTION_READ_ONLY_MESSAGE = "المنشأة في وضع القراءة فقط؛ لا يُنشأ حساب دخول ولا يُغيَّر بريده حتى تفعيل الاشتراك";
+const PLAN_LIMIT_USERS_MESSAGE = "بلغت المنشأة حد المستخدمين في باقتها؛ رقِّ الباقة من صفحة «الاشتراك» أو عطّل حسابًا آخر";
+const subscriptionErrorMessage = (error: { message?: string } | null) => {
+  const text = String(error?.message ?? "");
+  if (text.includes("SUBSCRIPTION_READ_ONLY")) return SUBSCRIPTION_READ_ONLY_MESSAGE;
+  if (text.includes("PLAN_LIMIT_USERS")) return PLAN_LIMIT_USERS_MESSAGE;
+  return null;
+};
 const escapeLike = (value: string) => value.replace(/[\\%_]/g, (character) => `\\${character}`);
 const hasPermissions = (permissions: unknown) =>
   Boolean(permissions && typeof permissions === "object" && !Array.isArray(permissions)
@@ -263,8 +272,20 @@ Deno.serve(async (req: Request) => {
       if (linkedUser?.user) existing = toAccount(linkedUser.user as unknown as Record<string, unknown>);
     }
 
+    // S15: اشتراك المنشأة (القراءة فقط، وحد المستخدمين). بلا S15 على القاعدة: لا قيد
+    type SubscriptionState = { access?: string; plan?: { max_users?: number | null }; usage?: { users?: number } };
+    const loadSubscription = async (): Promise<SubscriptionState | null> => {
+      const { data: subscription, error: subscriptionError } = await callerClient.rpc("my_subscription");
+      if (subscriptionError && !missingFunction(subscriptionError)) throw subscriptionError;
+      return (subscriptionError ? null : subscription) as SubscriptionState | null;
+    };
+
     // ── تغيير البريد ─────────────────────────────────────────────────────────
     if (changingEmail) {
+      // يفك الربط ثم يعيده؛ في القراءة فقط لا تُعاد العضوية فيُقفل الموظف خارج حسابه، فيُرفض قبل أي تغيير
+      if ((await loadSubscription())?.access === "read_only") {
+        return respond({ success: false, error: SUBSCRIPTION_READ_ONLY_MESSAGE }, 403);
+      }
       const newEmail = String(body?.email ?? "").trim().toLowerCase();
       if (!EMAIL_PATTERN.test(newEmail) || newEmail.length > 254) {
         return respond({ success: false, error: "البريد الإلكتروني غير صحيح" }, 400);
@@ -410,6 +431,17 @@ Deno.serve(async (req: Request) => {
     if (existing && existing.email !== email) {
       return respond({ success: false, error: "بريد الموظف تغيّر عن بريد حساب دخوله؛ راجع مدير النظام" }, 409);
     }
+    // S15: ربط حساب جديد بالموظف يُرفض قبل أي تغيير على الحساب إن كانت المنشأة للقراءة فقط أو بلغت حد المستخدمين.
+    // تغيير كلمة مرور حساب مربوط مسموح دائمًا (ليصل الموظف إلى بياناته في القراءة فقط). الحكم النهائي للقاعدة.
+    const linking = !existing || String(target.auth_user_id ?? "") !== existing.id;
+    if (linking) {
+      const sub = await loadSubscription();
+      if (sub?.access === "read_only") return respond({ success: false, error: SUBSCRIPTION_READ_ONLY_MESSAGE }, 403);
+      const maxUsers = sub?.plan?.max_users;
+      if (typeof maxUsers === "number" && Number(sub?.usage?.users ?? 0) >= maxUsers) {
+        return respond({ success: false, error: PLAN_LIMIT_USERS_MESSAGE }, 409);
+      }
+    }
 
     const metadata = { employee_id: target.id, emp_id: target.emp_id, name: target.name };
     const appMetadata = { company_id: companyId, employee_id: target.id, account_type: "employee" };
@@ -425,7 +457,10 @@ Deno.serve(async (req: Request) => {
       if (error) throw error;
       const linkError = await linkAccount(existing.id);
       if (linkError) {
-        return respond({ success: false, error: "تعذر ربط حساب الدخول بالموظف؛ الحساب مستخدم في منشأة أخرى أو غير صالح" }, 409);
+        return respond({
+          success: false,
+          error: subscriptionErrorMessage(linkError) ?? "تعذر ربط حساب الدخول بالموظف؛ الحساب مستخدم في منشأة أخرى أو غير صالح",
+        }, 409);
       }
     } else {
       const { data: createdUser, error } = await admin.auth.admin.createUser({
@@ -442,7 +477,7 @@ Deno.serve(async (req: Request) => {
       if (linkError) {
         // لا يبقى حساب بلا موظف
         await admin.auth.admin.deleteUser(createdUser.user.id).then(() => undefined, () => undefined);
-        return respond({ success: false, error: "تعذر ربط حساب الدخول بالموظف؛ لم يُنشأ الحساب" }, 409);
+        return respond({ success: false, error: subscriptionErrorMessage(linkError) ?? "تعذر ربط حساب الدخول بالموظف؛ لم يُنشأ الحساب" }, 409);
       }
       created = true;
     }

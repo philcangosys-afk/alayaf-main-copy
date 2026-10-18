@@ -28,6 +28,7 @@ import {
 import { toast } from "sonner";
 import { useI18n } from "@/i18n";
 import { supabase } from "@/lib/supabaseClient";
+import SubscriptionBanner from "@/components/subscription/SubscriptionBanner";
 import DynamicRequestForm from "@/components/hr/DynamicRequestForm";
 import LeaveRequestForm from "@/components/hr/LeaveRequestForm";
 import { requestFormSchemas } from "@/components/hr/formSchemas";
@@ -1077,6 +1078,8 @@ export default function EmployeePortal() {
 
         {/* Mobile Content */}
         <div className="pb-32">
+          {/* S15: المنشأة للقراءة فقط */}
+          <SubscriptionBanner variant="portal" />
           {currentPage === "home" && (
             <div className="pb-32">
               {/* Hero attendance card */}
@@ -1634,6 +1637,8 @@ export default function EmployeePortal() {
 
         {/* Desktop Content */}
         <main className="max-w-7xl mx-auto px-6 py-8">
+          {/* S15: المنشأة للقراءة فقط */}
+          <div className="-mx-4 -mt-3 mb-4"><SubscriptionBanner variant="portal" /></div>
           {currentPage !== "home" && (
             <button
               onClick={() => setCurrentPage("home")}
