@@ -43,10 +43,10 @@ const DEFAULTS: PayrollSettings = {
   earnedSalary: false,
   // يُطبَّق في كشف الرواتب: تشغيله يجعل كل يوم عمل بلا تسجيل حضور غيابًا مخصومًا، فالافتراضي إيقافه
   earnedSalaryApplied: false,
-  // الافتراضي: حصة الموظف تُخصم من كل سعودي كما كان قبل HR-7 (حقل "لا" القديم كان يُحفظ تلقائيًا)
-  gosiFollowEmployeeFlag: false,
-  // الافتراضي: الأساسي فقط كما كان قبل HR-7
-  gosiIncludeHousing: false,
+  // منذ S11 الافتراضي: الموظف السعودي المسجّل «لا» في ملفه لا يُخصم منه (نموذج الموظف لا يحفظ «لا» إلا باختيار صريح)
+  gosiFollowEmployeeFlag: true,
+  // منذ S11 الافتراضي: أجر الاشتراك = الأساسي + بدل السكن كما في نظام التأمينات
+  gosiIncludeHousing: true,
   monthDaysMethod: "30 يوم ثابت (افتراضي حسب نظام العمل السعودي)",
   month31Policy: "لصالح الموظف (متساهل)",
 };
@@ -245,13 +245,13 @@ export default function HRPayrollSettings() {
               <div className="space-y-3 mt-6">
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-1">{t("اتباع حقل التأمينات الاجتماعية في ملف الموظف")} <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{t("مطبّق")}</span></label>
                 <YesNo name="gosi_follow_flag" value={s.gosiFollowEmployeeFlag} onChange={(v) => set("gosiFollowEmployeeFlag", v)} />
-                <p className="text-xs text-gray-500 mt-2">{t("لا (الافتراضي): تُخصم حصة الموظف في التأمينات من كل موظف سعودي، إلا نوع «سعودي غير قابل للخصم». نعم: الموظف السعودي المسجّل في ملفه «غير مشمول» لا يُخصم منه.")}</p>
-                {s.gosiFollowEmployeeFlag && <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{t("تنبيه: نموذج الموظف القديم كان يحفظ «لا» تلقائيًا. راجع صفحة التأمينات الاجتماعية وصحّح ملفات السعوديين قبل التفعيل.")}</p>}
+                <p className="text-xs text-gray-500 mt-2">{t("نعم (الافتراضي): الموظف السعودي المسجّل في ملفه «غير مشمول» لا يُخصم منه ولا تُحسب عليه حصة المنشأة. لا: تُخصم حصة الموظف من كل موظف سعودي، إلا نوع «سعودي غير قابل للخصم».")}</p>
+                {s.gosiFollowEmployeeFlag && <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{t("تنبيه: الموظف السعودي المسجّل «لا» في ملفه لا يُخصم منه ولا تُحسب عليه حصة المنشأة. راجع صفحة التأمينات الاجتماعية وتأكد من ملفات السعوديين.")}</p>}
               </div>
               <div className="space-y-3 mt-6">
                 <label className="text-sm font-medium text-gray-700 flex items-center gap-1">{t("أجر الاشتراك في التأمينات يشمل بدل السكن")} <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">{t("مطبّق")}</span></label>
                 <YesNo name="gosi_include_housing" value={s.gosiIncludeHousing} onChange={(v) => set("gosiIncludeHousing", v)} />
-                <p className="text-xs text-gray-500 mt-2">{t("لا (الافتراضي): حصة الموظف من الراتب الأساسي فقط كما كانت. نعم: من الأساسي + بدل السكن بحد 45,000 كما في نظام التأمينات. اختر ما يطابق الأجر المسجّل لموظفيك في التأمينات الاجتماعية، فالخصم يجب أن يساوي ما تطالب به التأمينات.")}</p>
+                <p className="text-xs text-gray-500 mt-2">{t("نعم (الافتراضي): حصة الموظف وحصة المنشأة من الأساسي + بدل السكن بحد 45,000 كما في نظام التأمينات. لا: من الراتب الأساسي فقط. اختر ما يطابق الأجر المسجّل لموظفيك في التأمينات الاجتماعية، فالخصم يجب أن يساوي ما تطالب به التأمينات.")}</p>
               </div>
             </div>
 

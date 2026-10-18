@@ -123,7 +123,9 @@ export default function RequireAuth() {
     );
   }
 
-  if (location.pathname !== "/") {
+  // «الطلبات الواردة» لكل مستخدم: تعرض ما وُجّه إليه فقط (المستلم في قاعدة البيانات)، فمعتمد الرواتب
+  // أو المدير المباشر يقرر في طلبه ولو لم تكن له صلاحية قسم الطلبات
+  if (location.pathname !== "/" && !location.pathname.startsWith("/hr/requests/incoming")) {
     const mainKey = permissionForMainPath(location.pathname);
     const keys = location.pathname.startsWith("/hr") ? permissionForHRPath(location.pathname) : permissionForMainSubPath(location.pathname);
     if (mainKey && !checkPerm(permissions, ...keys)) return <Navigate to="/" replace />;

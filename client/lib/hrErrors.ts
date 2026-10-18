@@ -28,6 +28,8 @@ const HR_ERROR_MESSAGES: Record<string, string> = {
   PAYROLL_PERIOD_EMPTY: "لا توجد رواتب محفوظة لهذا الشهر",
   PAYROLL_POSTING_RULE_NOT_FOUND: "قاعدة الترحيل المحاسبي غير مضبوطة",
   PAYROLL_MANAGE_PERMISSION_REQUIRED: "الترحيل يتطلب صلاحية إدارة الرواتب",
+  PAYROLL_APPROVER_MISSING: "لا يوجد معتمد للرواتب: أنشئ سلسلة موافقات فعّالة من نوع «الرواتب» (الموارد البشرية ← الموافقات) معتمدها موظف له حساب دخول، ثم أعد الإرسال",
+  PAYROLL_APPROVER_IS_SENDER: "معتمد الرواتب في سلسلة الموافقات هو المرسل نفسه، ولا يعتمد المرسل طلبه؛ اجعل المعتمد موظفًا آخر ثم أعد الإرسال",
   ACCOUNTING_MANAGE_PERMISSION_REQUIRED: "الترحيل يتطلب صلاحية إدارة المحاسبة",
   ACCOUNTING_FISCAL_PERIOD_REQUIRED: "لا توجد فترة مالية تشمل نهاية هذا الشهر",
   ACCOUNTING_FISCAL_PERIOD_CLOSED: "الفترة المالية لهذا الشهر مقفلة",

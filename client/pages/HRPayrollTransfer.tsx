@@ -18,6 +18,8 @@ type PayrollRow = {
   allowances: number;
   deductions: number;
   absence: number;
+  /** حصة المنشأة في التأمينات (S11): تُقيَّد مصروفًا مع الرواتب ولا تُخصم من الموظف */
+  employer: number;
   net: number;
   notes: string;
   status: string;
@@ -48,7 +50,7 @@ export default function HRPayrollTransfer() {
     setLoading(true);
     const { data, error } = await supabase
       .from("payroll")
-      .select("id, emp_id, emp_name, department, basic_salary, allowances, deductions, expense_reduction, net_salary, notes, status, accounting_status, accounting_journal_entry_id")
+      .select("id, emp_id, emp_name, department, basic_salary, allowances, deductions, expense_reduction, social_insurance_employer, net_salary, notes, status, accounting_status, accounting_journal_entry_id")
       .eq("month", p)
       .order("emp_name");
     setLoading(false);
@@ -66,6 +68,7 @@ export default function HRPayrollTransfer() {
         allowances: Number(r.allowances ?? 0),
         deductions: Number(r.deductions ?? 0),
         absence: Number(r.expense_reduction ?? 0),
+        employer: Number(r.social_insurance_employer ?? 0),
         net: Number(r.net_salary ?? 0),
         notes: String(r.notes ?? ""),
         status: String(r.status ?? "معلق"),
@@ -87,11 +90,12 @@ export default function HRPayrollTransfer() {
           basic: acc.basic + r.basic,
           allowances: acc.allowances + r.allowances,
           absence: acc.absence + r.absence,
+          employer: acc.employer + r.employer,
           deductions: acc.deductions + r.deductions,
           net: acc.net + r.net,
           held: acc.held + (r.status === HELD ? r.net : 0),
         }),
-        { basic: 0, allowances: 0, absence: 0, deductions: 0, net: 0, held: 0 }
+        { basic: 0, allowances: 0, absence: 0, employer: 0, deductions: 0, net: 0, held: 0 }
       ),
     [rows]
   );
@@ -179,14 +183,15 @@ export default function HRPayrollTransfer() {
               </div>
               <div className="space-y-1 text-sm text-gray-600 leading-relaxed">
                 <p>{t("ترحيل استحقاقات واستقطاعات رواتب الفترة المحددة إلى النظام المحاسبي بقيد واحد، بعد اعتماد كل رواتب الشهر. بعد الترحيل تتحول حالة السجل إلى «مرحّل» ولا يُرحّل مرة أخرى.")}</p>
-                <p>{t("مصروف الرواتب = الاستحقاقات بعد خصم الغياب والإجازات غير المدفوعة والبدلات المخصومة. الراتب الموقوف (بموافقة الإدارة) يُستحق في القيد ويُحبس صرفه حتى رفع الإيقاف من هذه الصفحة. لا يُرحَّل راتب تغيّر بعد موافقة الإدارة.")}</p>
+                <p>{t("مصروف الرواتب = الاستحقاقات بعد خصم الغياب والإجازات غير المدفوعة والبدلات المخصومة. حصة المنشأة في التأمينات تُقيَّد في القيد نفسه مصروفًا على حسابها (أو على مصروف الرواتب إن لم يُضبط حسابها) والتزامًا على حساب التأمينات. الراتب الموقوف (بموافقة الإدارة) يُستحق في القيد ويُحبس صرفه حتى رفع الإيقاف من هذه الصفحة. لا يُرحَّل راتب تغيّر بعد موافقة الإدارة.")}</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
               <SummaryCard label="إجمالي الأساسي والبدلات" value={totals.basic + totals.allowances} />
               <SummaryCard label="خصم الغياب والإجازات والبدلات المخصومة" value={totals.absence} tone="red" />
               <SummaryCard label="مصروف الرواتب" value={totals.basic + totals.allowances - totals.absence} />
+              <SummaryCard label="حصة المنشأة في التأمينات" value={totals.employer} />
               <SummaryCard label="صافي للصرف" value={totals.net - totals.held} tone="green" />
               <SummaryCard label="موقوف الصرف" value={totals.held} tone="orange" />
             </div>

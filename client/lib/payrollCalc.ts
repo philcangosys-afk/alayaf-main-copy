@@ -6,7 +6,7 @@ import { fetchAllRows } from "@/lib/fetchAll";
 import { eachDate, monthRange, riyadhToday } from "@/lib/hrDates";
 import { isApprovedStatus } from "@/lib/hrStatus";
 import { advanceInstallmentDue, allocateAdvanceRepayments, isCancelledPayrollStatus, parseApprovedAdvance, type AdvanceRecord } from "@/lib/advances";
-import { GOSI_EMPLOYEE_RATE_SAUDI, gosiContributionWage, gosiDeductsFromEmployee, gosiSaudiRates, isHousingAllowance } from "@/lib/gosi";
+import { GOSI_EMPLOYEE_RATE_SAUDI, gosiContributionWage, gosiDeductsFromEmployee, gosiSaudiRates, gosiShares, isHousingAllowance } from "@/lib/gosi";
 import { classifyAttendanceDay, type DayCategory, type DayRecord } from "@/lib/attendanceRules";
 import { effectiveLateMinutes, isScheduledWorkDay, loadWorkSchedules, scheduleForEmployee, type WorkSchedule } from "@/lib/workSchedule";
 import { approvedLeaveDatesByEmployee, loadApprovedLeaves, loadOfficialHolidays, officialHolidayDates, type HolidayScope } from "@/lib/attendanceManual";
@@ -29,9 +29,9 @@ export type PayrollPolicy = {
   excludeAdvances: boolean;
   /** الراتب المكتسب حسب الحضور: يوم العمل الماضي بلا تسجيل يُعد غيابًا */
   countUnrecordedAsAbsent: boolean;
-  /** اتباع حقل التأمينات في ملف الموظف: السعودي المسجّل "لا" لا يُخصم منه (الافتراضي: يُخصم من كل سعودي كما كان) */
+  /** اتباع حقل التأمينات في ملف الموظف: السعودي المسجّل "لا" لا يُخصم منه (الافتراضي منذ S11؛ يُطفأ صراحة من الإعدادات) */
   gosiFollowEmployeeFlag: boolean;
-  /** أجر الاشتراك = الأساسي + بدل السكن (نظام التأمينات)؛ الافتراضي الأساسي فقط كما كان، حتى يطابق الأجر المسجّل في التأمينات */
+  /** أجر الاشتراك = الأساسي + بدل السكن (نظام التأمينات؛ الافتراضي منذ S11). يُطفأ صراحة ليكون الأساسي فقط */
   gosiIncludeHousing: boolean;
 };
 
@@ -40,8 +40,8 @@ export const DEFAULT_PAYROLL_POLICY: PayrollPolicy = {
   dayDivisor: "fixed30",
   excludeAdvances: false,
   countUnrecordedAsAbsent: false,
-  gosiFollowEmployeeFlag: false,
-  gosiIncludeHousing: false,
+  gosiFollowEmployeeFlag: true,
+  gosiIncludeHousing: true,
 };
 
 /** من قيم صفحة "إعدادات حساب الراتب" إلى سياسة الحساب */
@@ -56,8 +56,9 @@ export const payrollPolicyFromSettings = (settings: Record<string, unknown> | nu
     // مفتاح جديد عمدًا: القيمة القديمة earnedSalary حُفظت سابقًا "نعم" افتراضيًا ولم تكن مطبّقة،
     // فلا تُفعَّل إلا إذا اختارها مسؤول الرواتب من جديد بعد هذا الإصدار
     countUnrecordedAsAbsent: settings.earnedSalaryApplied === true,
-    gosiFollowEmployeeFlag: settings.gosiFollowEmployeeFlag === true,
-    gosiIncludeHousing: settings.gosiIncludeHousing === true,
+    // منذ S11 مفعّلان افتراضيًا: لا يُطفآن إلا بقيمة false محفوظة صراحة
+    gosiFollowEmployeeFlag: settings.gosiFollowEmployeeFlag !== false,
+    gosiIncludeHousing: settings.gosiIncludeHousing !== false,
   };
 };
 
@@ -191,6 +192,8 @@ export type PayrollLine = {
   socialInsurance: number;
   /** نسبة حصة الموظف في التأمينات المطبّقة (0 إن لم يُخصم) */
   socialInsuranceRate: number;
+  /** حصة المنشأة في التأمينات (لا تُخصم من الموظف؛ تُقيَّد مصروفًا والتزامًا عند الترحيل) */
+  socialInsuranceEmployer: number;
   penalties: number;
   /** الجزاءات المستحقة قبل السقف، وسقف المادة 72 (أجر 5 أيام)، وما يُرحَّل للشهر التالي */
   penaltiesOutstanding: number;
@@ -342,6 +345,19 @@ export const computePayrollLine = (input: PayrollLineInput): PayrollLine => {
     ? gosiSaudiRates(employee.socialInsuranceType, period).employee
     : 0;
   let socialInsurance = round2(gosiContributionWage(fullBasic, policy.gosiIncludeHousing ? fullHousing : 0) * factor * socialInsuranceRate);
+  // حصة المنشأة من أجر الاشتراك نفسه وبنسبة أيام الخدمة (lib/gosi: 11.75% للسعودي أو نسبة النظام الجديد،
+  // و2% لغير السعودي، والحصتان على المنشأة للسعودي غير القابل للخصم)
+  const employerGosi = gosiShares({
+    nationality: employee.nationality,
+    socialInsurance: employee.socialInsurance,
+    insuranceType: employee.socialInsuranceType,
+    basic: fullBasic,
+    housing: policy.gosiIncludeHousing ? fullHousing : 0,
+    month: period,
+    followFlag: policy.gosiFollowEmployeeFlag,
+  });
+  // تقريب واحد كما في حصة الموظف (الأجر × نسبة أيام الخدمة × النسبة)
+  const socialInsuranceEmployer = round2(employerGosi.wage * factor * employerGosi.employerRate);
   // المادة 72: لا يُقتطع للغرامات أكثر من أجر خمسة أيام في الشهر؛ والباقي يُخصم في الأشهر التالية
   const penaltiesOutstanding = round2(Math.max(0, input.penalties));
   const penaltyCap = round2(((fullBasic + fullAllowances) / 30) * 5);
@@ -410,6 +426,7 @@ export const computePayrollLine = (input: PayrollLineInput): PayrollLine => {
     proratedReduction,
     socialInsurance,
     socialInsuranceRate,
+    socialInsuranceEmployer,
     penalties,
     penaltiesOutstanding,
     penaltyCap,
@@ -823,6 +840,7 @@ export const payrollRowValues = (line: PayrollLine, employee: PayrollEmployeeRow
   allowances: round2(line.allowances + line.overtime),
   social_insurance_deduction: line.socialInsurance,
   social_insurance_rate: line.socialInsurance > 0 ? line.socialInsuranceRate : 0,
+  social_insurance_employer: line.socialInsuranceEmployer,
   nationality_snapshot: employee.nationality,
   deductions: line.totalDeductions,
   // تفصيل للترحيل المحاسبي: الغياب والإجازات غير المدفوعة والبدلات المخصومة تخفّض مصروف الرواتب
@@ -840,6 +858,7 @@ const NOT_STARTED_ROW_VALUES = {
   allowances: 0,
   social_insurance_deduction: 0,
   social_insurance_rate: 0,
+  social_insurance_employer: 0,
   deductions: 0,
   expense_reduction: 0,
   advance_deduction: 0,
