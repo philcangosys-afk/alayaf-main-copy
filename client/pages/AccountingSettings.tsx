@@ -21,6 +21,7 @@ type FiscalPeriod = { id: string; name: string; dateFrom: string; dateTo: string
 // رموز أخطاء حفظ حسابات الترحيل الافتراضية (save_accounting_posting_defaults) غير الموجودة في accountingErrorText
 // الترتيب مهم: PAYROLL_PAYABLE قبل PAYABLE لأن المطابقة بجزء من النص
 const POSTING_RULE_ERRORS: Array<[string, string]> = [
+  ["PAYROLL_SOCIAL_EXPENSE_ACCOUNT_CLASS_INVALID", "حساب مصروف حصة المنشأة في التأمينات يجب أن يكون من المصروفات (يبدأ بـ 5)."],
   ["PAYROLL_PAYABLE_ACCOUNT_CLASS_INVALID", "حساب الرواتب المستحقة يجب أن يكون من الالتزامات (يبدأ بـ 2)."],
   ["RECEIVABLE_ACCOUNT_CLASS_INVALID", "حساب ذمم العملاء يجب أن يكون من الأصول (يبدأ بـ 1)."],
   ["REVENUE_ACCOUNT_CLASS_INVALID", "حساب إيرادات المبيعات يجب أن يكون من الإيرادات (يبدأ بـ 4)."],
@@ -50,6 +51,8 @@ export default function AccountingSettings() {
   const canManage = canManagePerm(permissions, "accounting.settings");
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [defaults, setDefaults] = useState<Defaults>(initialDefaults);
+  // حساب مصروف حصة المنشأة في التأمينات (S12): اختياري؛ الفارغ = تُقيَّد الحصة على حساب مصروف الرواتب
+  const [employerGosiCode, setEmployerGosiCode] = useState("");
   const [periods, setPeriods] = useState<FiscalPeriod[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -70,7 +73,7 @@ export default function AccountingSettings() {
     setLoading(true); setError("");
     const [accountResult, ruleResult, periodResult] = await Promise.all([
       supabase.from("accounting_accounts").select("code, name_ar, parent_code").order("code"),
-      supabase.from("accounting_posting_rules").select("receivable_account_code, revenue_account_code, output_vat_account_code, payable_account_code, purchase_account_code, input_vat_account_code, inventory_shortage_account_code, inventory_surplus_account_code, payroll_expense_account_code, payroll_payable_account_code, payroll_social_insurance_account_code, payroll_deductions_account_code").eq("rule_code", "sales_default").eq("active", true).maybeSingle(),
+      supabase.from("accounting_posting_rules").select("receivable_account_code, revenue_account_code, output_vat_account_code, payable_account_code, purchase_account_code, input_vat_account_code, inventory_shortage_account_code, inventory_surplus_account_code, payroll_expense_account_code, payroll_payable_account_code, payroll_social_insurance_account_code, payroll_deductions_account_code, payroll_social_insurance_expense_account_code").eq("rule_code", "sales_default").eq("active", true).maybeSingle(),
       supabase.from("accounting_fiscal_periods").select("id, name, date_from, date_to, status, closed_at").order("date_from", { ascending: false }),
     ]);
     const firstError = accountResult.error ?? ruleResult.error ?? periodResult.error;
@@ -85,6 +88,7 @@ export default function AccountingSettings() {
       payrollExpenseAccountCode: String(ruleResult.data.payroll_expense_account_code ?? ""), payrollPayableAccountCode: String(ruleResult.data.payroll_payable_account_code ?? ""),
       payrollSocialInsuranceAccountCode: String(ruleResult.data.payroll_social_insurance_account_code ?? ""), payrollDeductionsAccountCode: String(ruleResult.data.payroll_deductions_account_code ?? ""),
     });
+    setEmployerGosiCode(String(ruleResult.data?.payroll_social_insurance_expense_account_code ?? ""));
     setPeriods((periodResult.data ?? []).map((period) => ({
       id: String(period.id), name: String(period.name), dateFrom: String(period.date_from), dateTo: String(period.date_to),
       status: period.status as FiscalPeriod["status"], closedAt: String(period.closed_at ?? ""),
@@ -100,7 +104,7 @@ export default function AccountingSettings() {
   const saveDefaults = async () => {
     if (Object.values(defaults).some((value) => !value)) { setError(t("اختر جميع حسابات الترحيل الافتراضية")); return; }
     setBusy(true); setError("");
-    const { error: saveError } = await supabase.rpc("save_accounting_posting_defaults", { p_defaults: defaults });
+    const { error: saveError } = await supabase.rpc("save_accounting_posting_defaults", { p_defaults: { ...defaults, payrollSocialInsuranceExpenseAccountCode: employerGosiCode } });
     setBusy(false);
     if (saveError) { setError(errorText(saveError.message)); return; }
     toast({ title: t("تم حفظ حسابات الترحيل الافتراضية") });
@@ -159,7 +163,7 @@ export default function AccountingSettings() {
 
         <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="font-bold">{t("حسابات الترحيل الافتراضية")}</h2><p className="text-xs text-slate-500">{t("تستخدمها قيود المبيعات والمشتريات والضريبة وتسويات المخزون. الحسابات التجميعية غير متاحة.")}</p></div><div className="rounded bg-slate-100 px-3 py-2 text-xs font-semibold">{t("العملة الأساسية")}: SAR — {t("ريال سعودي")}</div></div>
-          {loading ? <div className="py-10 text-center">{t("جاري التحميل...")}</div> : <><div className="grid gap-4 md:grid-cols-3"><AccountSelect label="ذمم العملاء" field="receivableAccountCode" prefix="1" /><AccountSelect label="إيرادات المبيعات" field="revenueAccountCode" prefix="4" /><AccountSelect label="ضريبة المخرجات" field="outputVatAccountCode" prefix="2" /><AccountSelect label="ذمم الموردين" field="payableAccountCode" prefix="2" /><AccountSelect label="المشتريات والمصروفات" field="purchaseAccountCode" prefix="5" /><AccountSelect label="ضريبة المدخلات" field="inputVatAccountCode" prefix="2" /><AccountSelect label="مصروف عجز المخزون" field="inventoryShortageAccountCode" prefix="5" /><AccountSelect label="إيراد فائض المخزون" field="inventorySurplusAccountCode" prefix="4" /><AccountSelect label="مصروف الرواتب والأجور" field="payrollExpenseAccountCode" prefix="5" /><AccountSelect label="رواتب مستحقة غير مدفوعة" field="payrollPayableAccountCode" prefix="2" /><AccountSelect label="التأمينات الاجتماعية المستحقة" field="payrollSocialInsuranceAccountCode" prefix="2" /><AccountSelect label="استقطاعات الموظفين المستحقة" field="payrollDeductionsAccountCode" prefix="2" /></div><div className="mt-4 flex justify-end"><button onClick={() => void saveDefaults()} disabled={busy || !canManage} className="inline-flex items-center gap-2 rounded bg-indigo-700 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{t("حفظ إعدادات الترحيل")}</button></div></>}
+          {loading ? <div className="py-10 text-center">{t("جاري التحميل...")}</div> : <><div className="grid gap-4 md:grid-cols-3"><AccountSelect label="ذمم العملاء" field="receivableAccountCode" prefix="1" /><AccountSelect label="إيرادات المبيعات" field="revenueAccountCode" prefix="4" /><AccountSelect label="ضريبة المخرجات" field="outputVatAccountCode" prefix="2" /><AccountSelect label="ذمم الموردين" field="payableAccountCode" prefix="2" /><AccountSelect label="المشتريات والمصروفات" field="purchaseAccountCode" prefix="5" /><AccountSelect label="ضريبة المدخلات" field="inputVatAccountCode" prefix="2" /><AccountSelect label="مصروف عجز المخزون" field="inventoryShortageAccountCode" prefix="5" /><AccountSelect label="إيراد فائض المخزون" field="inventorySurplusAccountCode" prefix="4" /><AccountSelect label="مصروف الرواتب والأجور" field="payrollExpenseAccountCode" prefix="5" /><AccountSelect label="رواتب مستحقة غير مدفوعة" field="payrollPayableAccountCode" prefix="2" /><AccountSelect label="التأمينات الاجتماعية المستحقة" field="payrollSocialInsuranceAccountCode" prefix="2" /><AccountSelect label="استقطاعات الموظفين المستحقة" field="payrollDeductionsAccountCode" prefix="2" /><label className="text-xs text-slate-600">{t("مصروف التأمينات الاجتماعية — حصة المنشأة")}<select value={employerGosiCode} onChange={(event) => setEmployerGosiCode(event.target.value)} disabled={!canManage} className="mt-1 h-10 w-full rounded border px-2 text-sm disabled:bg-slate-100"><option value="">{t("على حساب مصروف الرواتب والأجور")}</option>{employerGosiCode && !accountOptions("5").some((account) => account.code === employerGosiCode) && <option value={employerGosiCode}>{employerGosiCode} — {t("غير متاح للترحيل؛ اختر حسابًا آخر")}</option>}{accountOptions("5").map((account) => <option key={account.code} value={account.code}>{account.code} — {account.name_ar}</option>)}</select><span className="mt-1 block text-[11px] text-slate-500">{t("اختياري: قيد الرواتب يجعل حصة المنشأة في التأمينات مدينًا على هذا الحساب ودائنًا على التأمينات المستحقة.")}</span></label></div><div className="mt-4 flex justify-end"><button onClick={() => void saveDefaults()} disabled={busy || !canManage} className="inline-flex items-center gap-2 rounded bg-indigo-700 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}{t("حفظ إعدادات الترحيل")}</button></div></>}
         </section>
 
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

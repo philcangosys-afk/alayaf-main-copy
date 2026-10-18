@@ -9,7 +9,7 @@ import { isEmployeeActive } from "@/lib/employeeStatus";
 import { isSaudiNationality } from "@/lib/hrStatus";
 import { monthRange, riyadhMonth } from "@/lib/hrDates";
 import { allowancesForPeriod, loadPayrollPolicy } from "@/lib/payrollCalc";
-import { GOSI_TYPE_NEW_SYSTEM, GOSI_WAGE_CAP, gosiExcluded, gosiShares, type GosiShares } from "@/lib/gosi";
+import { GOSI_WAGE_CAP, gosiExcluded, gosiShares, isNewSystemType, type GosiShares } from "@/lib/gosi";
 import { useI18n } from "@/i18n";
 
 /**
@@ -161,7 +161,7 @@ export default function HRInsuranceSocial() {
                       <span className={`rounded px-2 py-1 text-xs font-semibold ${row.coverage === "included" ? "bg-emerald-50 text-emerald-700" : row.coverage === "excluded" ? "bg-slate-100 text-slate-600" : "bg-amber-50 text-amber-700"}`}>{t(COVERAGE_LABELS[row.coverage])}</span>
                       {row.flagIgnored && <span className="ms-1 text-xs text-amber-700">({t("يُخصم")})</span>}
                     </td>
-                    <td className="px-3 py-2">{row.insuranceType || "—"}{row.insuranceType === GOSI_TYPE_NEW_SYSTEM && <span className="block text-xs text-gray-500">{t("أول تسجيل من 3 يوليو 2024")}</span>}</td>
+                    <td className="px-3 py-2">{row.insuranceType || "—"}{isNewSystemType(row.insuranceType) && <span className="block text-xs text-gray-500">{t("أول تسجيل من 3 يوليو 2024")}</span>}</td>
                     <td className="px-3 py-2">{money(row.shares.wage)}{row.capped && <span className="ms-1 text-xs text-gray-500">({t("الحد الأعلى")})</span>}</td>
                     <td className="px-3 py-2">{money(row.shares.employee)} <span className="text-xs text-gray-500">{percent(row.shares.employeeRate)}</span></td>
                     <td className="px-3 py-2">{money(row.shares.employer)} <span className="text-xs text-gray-500">{percent(row.shares.employerRate)}</span></td>

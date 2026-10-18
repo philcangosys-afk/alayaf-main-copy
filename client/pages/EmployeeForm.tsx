@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { INACTIVE_EMPLOYEE_STATUSES, setEmployeeLoginState } from "@/components/hr/employeeActions";
 import { employeeErrorText } from "@/components/hr/employeeErrors";
-import { GOSI_INSURANCE_TYPES } from "@/lib/gosi";
+import { GOSI_TYPE_GCC, gosiTypesFor, isGccNationality, isNewSystemType } from "@/lib/gosi";
 import { isSaudiNationality } from "@/lib/hrStatus";
 
 export { employeeErrorText };
@@ -314,8 +314,10 @@ const EMPLOYEE_CATEGORIES = ["دوام", "عقد", "جزئي", "مؤقت"];
 const DEFAULT_WORK_SCHEDULES = ["جدول الشركة الأساسي", "جدول مرن", "عمل من المنزل", "نظام ورديات"];
 const DEFAULT_WORK_LOCATIONS = ["المقر الرئيسي", "فرع التشغيل والصيانة", "فرع المبيعات"];
 const ALLOWANCE_TYPES = ["بدل السكن", "بدل النقل", "بدل الأطفال", "بدل الطعام", "بدل الهاتف", "بدل اللباس", "أخرى"];
-// "النظام الجديد": أول تسجيل للموظف في التأمينات من 3 يوليو 2024 (نسبة المعاشات ترتفع كل يوليو)
-const SOCIAL_INSURANCE_TYPES = GOSI_INSURANCE_TYPES;
+// أنواع التأمين حسب الجنسية (lib/gosi): للسعودي القابل وغير القابل للخصم بالنظام السابق أو "الجديد" (أول تسجيل للموظف
+// في التأمينات من 3 يوليو 2024، ونسبة المعاشات ترتفع كل يوليو)، ولمواطن دول المجلس "مد الحماية التأمينية"،
+// ولغيرهم "الأخطار المهنية" فقط
+const NEW_SYSTEM_START = "2024-07-03";
 
 type OrganizationOptions = {
   departments: string[];
@@ -439,6 +441,17 @@ const validateEmployeeForm = (form: EmpFormData, mode: "create" | "edit", initia
   if (form.socialInsurance === "نعم" && (check("socialInsurance") || check("socialInsuranceType") || check("socialInsuranceStartDate"))) {
     if (!form.socialInsuranceType) add(2, "نوع التأمينات الاجتماعية مطلوب");
     if (!form.socialInsuranceStartDate) add(2, "تاريخ الاشتراك في التأمينات مطلوب");
+  }
+  // نوع التأمين يناسب الجنسية (يُفحص عند تغيير الجنسية أو التأمينات أو نوعها، فلا يمنع حفظ سجل قديم لم تُمس هذه الحقول فيه)
+  if (form.socialInsurance === "نعم" && form.socialInsuranceType
+      && (check("nationality") || check("socialInsurance") || check("socialInsuranceType"))
+      && !gosiTypesFor(form.nationality).includes(form.socialInsuranceType)) {
+    add(2, `نوع التأمين لا يناسب الجنسية؛ المتاح لهذه الجنسية: ${gosiTypesFor(form.nationality).map((type) => `«${type}»`).join(" أو ")}`);
+  }
+  // النظام الجديد لمن سُجّل في التأمينات أول مرة من 3 يوليو 2024؛ الاشتراك قبله يعني النظام السابق
+  if (form.socialInsurance === "نعم" && isNewSystemType(form.socialInsuranceType) && form.socialInsuranceStartDate
+      && (check("socialInsuranceType") || check("socialInsuranceStartDate")) && form.socialInsuranceStartDate < NEW_SYSTEM_START) {
+    add(2, "النظام الجديد للتأمينات لمن سُجّل أول مرة من 3 يوليو 2024؛ تاريخ الاشتراك قبله يعني النظام السابق (النوع بلا «النظام الجديد»)");
   }
   if (form.iban && check("iban") && !/^SA\d{22}$/.test(form.iban.toUpperCase().replace(/\s/g, ""))) add(2, "رقم الآيبان يجب أن يبدأ بـ SA ويتبعه 22 رقمًا");
 
@@ -1398,6 +1411,15 @@ function Step3Financial({ form, set }: { form: EmpFormData; set: <K extends keyo
               <span className="text-sm">{t("لا")}</span>
             </label>
           </div>
+          {form.socialInsurance === "لا" && form.nationality.trim() !== "" && (
+            <p className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+              {t(isSaudiNationality(form.nationality)
+                ? "الموظف السعودي في القطاع الخاص مشمول إلزاميًا بالتأمينات (المعاشات والأخطار المهنية وساند)؛ اختر «لا» لحالة مستثناة نظامًا فقط. مع «لا» لا تُخصم حصته ولا تُحسب حصة المنشأة ما دام إعداد «اتباع حقل التأمينات» مفعّلًا (الافتراضي)، وإن أُطفئ يُخصم منه كأنه مشمول"
+                : isGccNationality(form.nationality)
+                  ? "مواطن دول مجلس التعاون مشمول بمد الحماية التأمينية وفق نظام بلده (يُسدَّد عبر التأمينات)؛ اختر «لا» لحالة مستثناة فقط. مع «لا» لا تُحسب له حصة"
+                  : "غير السعودي مشمول إلزاميًا بفرع الأخطار المهنية (2% على المنشأة، لا يُخصم من راتبه)؛ اختر «لا» لحالة مستثناة نظامًا فقط. مع «لا» لا تُحسب حصة المنشأة")}
+            </p>
+          )}
           {form.socialInsurance === "" && isSaudiNationality(form.nationality) && (
             <p className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
               {t("التأمينات الاجتماعية غير محددة في ملف الموظف؛ اختر نعم أو لا. مسير الرواتب يخصم حصة الموظف من كل سعودي ما لم يُفعَّل إعداد «اتباع حقل التأمينات» في إعدادات حساب الراتب")}
@@ -1405,7 +1427,13 @@ function Step3Financial({ form, set }: { form: EmpFormData; set: <K extends keyo
           )}
           {form.socialInsurance === "نعم" && (
             <div className="bg-blue-50 rounded-lg p-4 space-y-4 border border-blue-200">
-              <FSelect label="نوع التأمين *" value={form.socialInsuranceType} onChange={(v) => set("socialInsuranceType", v)} options={SOCIAL_INSURANCE_TYPES} placeholder="اختر نوع التأمين" />
+              <FSelect label="نوع التأمين *" value={form.socialInsuranceType} onChange={(v) => set("socialInsuranceType", v)} options={gosiTypesFor(form.nationality)} placeholder="اختر نوع التأمين" />
+              {form.socialInsuranceType === GOSI_TYPE_GCC && (
+                <p className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">{t("اشتراك مواطن دول المجلس بنسب نظام بلده (مد الحماية التأمينية). مسير الرواتب لا يحسب نسب بلده بعد، ويحسب له 2% الأخطار المهنية على المنشأة فقط: أضف حصة الموظف بدلًا مخصومًا في بياناته المالية، وقيّد بقية حصة المنشأة بقيد يدوي")}</p>
+              )}
+              {form.socialInsuranceType && !gosiTypesFor(form.nationality).includes(form.socialInsuranceType) && (
+                <p className="rounded border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">{t("نوع التأمين المسجّل لا يناسب جنسية الموظف؛ اختر النوع الصحيح")}</p>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">{t("تاريخ الاشتراك (ميلادي) *")}</label>
                 <input
