@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Eye, EyeOff, MailCheck } from "lucide-react";
+import { Building2, FileText, Globe, Hash, Lock, Mail, MailCheck, MapPin, Phone, Users } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
-import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authInputClass, authLabelClass, authLinkClass, authNoteClass } from "@/components/AuthShell";
-import { COUNTRIES, EMPLOYEE_RANGES, SAUDI_COUNTRY_CODE, isValidPhone, normalizeIdentifier, normalizePhone } from "@/lib/countries";
+import AuthShell, { AUTH_COLORS } from "@/components/AuthShell";
+import { ChoiceCards, Field, FormSection, Notice, PasswordInput, SelectInput, StatusIcon, TextInput, linkClass, primaryButtonClass } from "@/components/AuthForm";
+import {
+  COUNTRIES, EMPLOYEE_RANGES, SAUDI_COUNTRY_CODE, SAUDI_REGIONS, isForeignCr, isForeignVat, isSaudiCr, isSaudiVat, isValidPhone, normalizeIdentifier, normalizePhone,
+} from "@/lib/countries";
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -25,57 +28,88 @@ const signupErrorText = (error: { message?: string; code?: string; status?: numb
   return "تعذر إنشاء الحساب، حاول مرة أخرى";
 };
 
+type YesNo = "yes" | "no";
+
 type Form = {
   name_ar: string;
-  cr_number: string;
   employees_range: string;
+  cr_number: string;
   country: string;
+  region: string;
+  city: string;
+  address_ar: string;
+  vat_registered: YesNo | null;
+  vat_number: string;
   phone: string;
   email: string;
   password: string;
   confirm: string;
 };
 
-/** الحقول الإلزامية (تُعلَن لقارئ الشاشة بـ aria-required) */
-const REQUIRED_FIELDS: ReadonlyArray<keyof Form> = ["name_ar", "phone", "email", "password", "confirm"];
+type FieldKey = keyof Form;
+
+/** ترتيب الحقول في الصفحة (المؤشر ينتقل لأول حقل خاطئ) */
+const FIELD_ORDER: FieldKey[] = ["name_ar", "employees_range", "cr_number", "country", "region", "city", "address_ar", "vat_registered", "vat_number", "phone", "email", "password", "confirm"];
 
 const emptyForm: Form = {
-  name_ar: "", cr_number: "", employees_range: "", country: SAUDI_COUNTRY_CODE, phone: "", email: "", password: "", confirm: "",
+  name_ar: "", employees_range: "", cr_number: "", country: SAUDI_COUNTRY_CODE, region: "", city: "", address_ar: "",
+  vat_registered: null, vat_number: "", phone: "", email: "", password: "", confirm: "",
 };
 
-/** بيانات المنشأة المحفوظة مع الحساب حتى يكتمل التسجيل بعد تأكيد البريد (صفحة تسجيل المنشأة تقرؤها) */
+/** بيانات المنشأة المحفوظة مع الحساب حتى يكتمل التسجيل بعد تأكيد البريد (صفحة إكمال التسجيل تقرؤها) */
 export type SignupCompanyMetadata = {
   name_ar: string;
   cr_number: string;
   employees_range: string;
   country: string;
+  region: string;
+  city: string;
+  address_ar: string;
+  vat_registered: boolean;
+  vat_number: string;
   phone: string;
 };
 
 /**
- * تسجيل منشأة جديدة: بيانات المنشأة وحساب الدخول في صفحة واحدة.
+ * تسجيل منشأة جديدة: بيانات المنشأة وعنوانها وتسجيلها الضريبي وحساب صاحبها في صفحة واحدة.
  * يُنشأ حساب ببريد يُؤكَّد برسالة، وتُحفظ بيانات المنشأة معه؛ بعد التأكيد والدخول تُرسل المنشأة للموافقة.
  */
 export default function CompanySignup() {
   const [form, setForm] = useState<Form>(emptyForm);
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sentTo, setSentTo] = useState("");
-  const [errors, setErrors] = useState<Partial<Record<keyof Form, string>>>({});
+  const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({});
 
-  const set = (key: keyof Form, value: string) => {
+  const set = <K extends FieldKey>(key: K, value: Form[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
     setErrors((prev) => ({ ...prev, [key]: undefined }));
   };
   const isSaudi = form.country === SAUDI_COUNTRY_CODE;
   const dial = COUNTRIES.find((country) => country.code === form.country)?.dial ?? "";
 
-  const validate = (): Partial<Record<keyof Form, string>> => {
-    const next: Partial<Record<keyof Form, string>> = {};
+  const changeCountry = (country: string) => {
+    // مناطق السعودية قائمة، وغيرها نص؛ والصيغ تختلف، فتُفرَّغ المنطقة وتُمسح أخطاء الرقمين
+    // تُفرَّغ المنطقة عند الانتقال من السعودية أو إليها فقط (قائمة المناطق ↔ نص)
+    setForm((prev) => ({ ...prev, country, region: (country === SAUDI_COUNTRY_CODE) === (prev.country === SAUDI_COUNTRY_CODE) ? prev.region : "" }));
+    setErrors((prev) => ({ ...prev, country: undefined, region: undefined, vat_number: undefined, cr_number: undefined }));
+  };
+
+  const validate = (): Partial<Record<FieldKey, string>> => {
+    const next: Partial<Record<FieldKey, string>> = {};
     if (!form.name_ar.trim()) next.name_ar = "اكتب اسم المنشأة";
     const cr = normalizeIdentifier(form.cr_number.trim());
-    if (cr && isSaudi && !/^\d{10}$/.test(cr)) next.cr_number = "السجل التجاري في السعودية 10 أرقام";
-    if (cr && !isSaudi && !(/^[A-Za-z0-9/-]{1,30}$/.test(cr) && /[A-Za-z0-9]/.test(cr))) next.cr_number = "السجل التجاري حروف لاتينية وأرقام (ويُقبل / و-)، حتى 30 حرفًا";
+    if (cr && isSaudi && !isSaudiCr(cr)) next.cr_number = "السجل التجاري في السعودية 10 أرقام";
+    if (cr && !isSaudi && !isForeignCr(cr)) next.cr_number = "السجل التجاري حروف لاتينية وأرقام (ويُقبل / و-)، حتى 30 حرفًا";
+    if (!form.country) next.country = "اختر الدولة";
+    if (!form.region.trim()) next.region = isSaudi ? "اختر المنطقة" : "اكتب المنطقة أو الولاية";
+    else if (form.region.trim().length > 100) next.region = "المنطقة 100 حرف على الأكثر";
+    if (!form.vat_registered) next.vat_registered = "حدد هل المنشأة مسجّلة ضريبيًا";
+    if (form.vat_registered === "yes") {
+      const vat = normalizeIdentifier(form.vat_number.trim());
+      if (!vat) next.vat_number = "اكتب الرقم الضريبي";
+      else if (isSaudi && !isSaudiVat(vat)) next.vat_number = "الرقم الضريبي 15 رقمًا يبدأ وينتهي بالرقم 3";
+      else if (!isSaudi && !isForeignVat(vat)) next.vat_number = "الرقم الضريبي حروف لاتينية وأرقام وشرطة، من 3 إلى 20 حرفًا";
+    }
     if (!form.phone.trim()) next.phone = "اكتب رقم الجوال";
     else if (!isValidPhone(form.phone)) next.phone = "رقم الجوال من 8 إلى 15 رقمًا";
     const email = form.email.trim().toLowerCase();
@@ -86,21 +120,34 @@ export default function CompanySignup() {
     return next;
   };
 
+  const focusField = (key: FieldKey) => {
+    const target = key === "vat_registered"
+      ? document.querySelector<HTMLInputElement>('input[name="signup-vat_registered"]')
+      : document.getElementById(`signup-${key}`);
+    target?.focus();
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     const found = validate();
     setErrors(found);
-    const firstKey = (Object.keys(found) as Array<keyof Form>)[0];
+    const firstKey = FIELD_ORDER.find((key) => found[key]);
     if (firstKey) {
-      document.getElementById(`signup-${firstKey}`)?.focus();
+      focusField(firstKey);
       return;
     }
     const cleanEmail = form.email.trim().toLowerCase();
+    const registered = form.vat_registered === "yes";
     const company: SignupCompanyMetadata = {
       name_ar: form.name_ar.trim(),
       cr_number: normalizeIdentifier(form.cr_number.trim()),
       employees_range: form.employees_range,
       country: form.country,
+      region: form.region.trim(),
+      city: form.city.trim(),
+      address_ar: form.address_ar.trim(),
+      vat_registered: registered,
+      vat_number: registered ? normalizeIdentifier(form.vat_number.trim()) : "",
       phone: normalizePhone(form.phone),
     };
     setLoading(true);
@@ -127,136 +174,167 @@ export default function CompanySignup() {
 
   if (sentTo) {
     return (
-      <AuthShell title="تحقق من بريدك الإلكتروني" footer={<p><Link to="/login" className={authLinkClass}>الذهاب إلى تسجيل الدخول</Link></p>}>
-        <div className="flex items-start gap-4">
-          <MailCheck className="mt-1 h-9 w-9 shrink-0" style={{ color: AUTH_COLORS.emerald }} aria-hidden="true" />
-          <div className="space-y-3 text-[15px] leading-8" style={{ color: AUTH_COLORS.text }}>
-            <p>
-              أرسلنا رابط تأكيد إلى <span dir="ltr" className="font-semibold">{sentTo}</span>.
-            </p>
-            <p style={{ color: AUTH_COLORS.muted }}>
-              افتح الرابط ثم سجّل الدخول: ستجد بيانات منشأتك جاهزة لترسلها للموافقة. بعد موافقة إدارة المنصة تبدأ العمل مباشرة.
-              إن لم تصلك الرسالة خلال دقائق فراجع البريد غير المرغوب فيه، أو جرّب تسجيل الدخول إن كان البريد مسجّلًا من قبل.
-            </p>
-          </div>
-        </div>
+      <AuthShell
+        icon={<StatusIcon icon={MailCheck} />}
+        title="تحقق من بريدك الإلكتروني"
+        subtitle={<>أرسلنا رابط تأكيد إلى <span dir="ltr" className="font-semibold" style={{ color: AUTH_COLORS.text }}>{sentTo}</span></>}
+        footer={<p><Link to="/login" className={linkClass}>الذهاب إلى تسجيل الدخول</Link></p>}
+      >
+        <ol className="space-y-3 text-[14.5px] leading-7" style={{ color: AUTH_COLORS.text }}>
+          <li className="flex gap-3"><span className="font-bold" style={{ color: AUTH_COLORS.emerald }}>1.</span>افتح الرابط في الرسالة لتأكيد بريدك.</li>
+          <li className="flex gap-3"><span className="font-bold" style={{ color: AUTH_COLORS.emerald }}>2.</span>سجّل الدخول: ستجد بيانات منشأتك جاهزة، فراجعها وأرسلها للموافقة.</li>
+          <li className="flex gap-3"><span className="font-bold" style={{ color: AUTH_COLORS.emerald }}>3.</span>بعد موافقة إدارة المنصة تبدأ العمل مباشرة.</li>
+        </ol>
+        <Notice>إن لم تصلك الرسالة خلال دقائق فراجع البريد غير المرغوب فيه، أو جرّب تسجيل الدخول إن كان البريد مسجّلًا من قبل.</Notice>
       </AuthShell>
     );
   }
 
-  const fieldError = (key: keyof Form) =>
-    errors[key] ? <p id={`signup-${key}-error`} className="mt-1.5 text-[13px] text-[#B42318]">{errors[key]}</p> : null;
-  const inputProps = (key: keyof Form) => ({
+  const input = (key: Exclude<FieldKey, "vat_registered">) => ({
     id: `signup-${key}`,
-    value: form[key],
+    value: form[key] as string,
     onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => set(key, event.target.value),
     disabled: loading,
-    "aria-invalid": errors[key] ? true : undefined,
-    "aria-required": REQUIRED_FIELDS.includes(key) ? true : undefined,
-    "aria-describedby": errors[key] ? `signup-${key}-error` : undefined,
-    className: authInputClass,
-    // لون الحد الأحمر بنمط مباشر: صنفان لنفس الخاصية في Tailwind لا يُضمن أيهما يغلب
-    style: errors[key] ? { borderColor: "#D92D20" } : undefined,
+    error: errors[key],
   });
-  const required = <span className="text-[#B42318]" aria-hidden="true"> *</span>;
 
   return (
     <AuthShell
       wide
       title="سجّل منشأتك"
-      subtitle="أدخل بيانات منشأتك وحساب صاحبها. بعد تأكيد البريد وموافقة إدارة المنصة تبدأ العمل."
+      subtitle="أنشئ حساب منشأتك في دقائق. بعد تأكيد بريدك ومراجعة إدارة المنصة تبدأ العمل."
       footer={
         <p>
           لديك حساب؟{" "}
-          <Link to="/login" className={authLinkClass}>تسجيل الدخول</Link>
+          <Link to="/login" className={linkClass}>تسجيل الدخول</Link>
         </p>
       }
     >
-      <form onSubmit={submit} className="space-y-8" noValidate>
-        <fieldset className="space-y-4">
-          <legend className="mb-1 text-[16px] font-bold" style={{ color: AUTH_COLORS.ink }}>بيانات المنشأة</legend>
-          <div>
-            <label htmlFor="signup-name_ar" className={authLabelClass}>اسم المنشأة{required}</label>
-            <input {...inputProps("name_ar")} autoComplete="organization" placeholder="مثال: مؤسسة الريادة للتجارة" />
-            {fieldError("name_ar")}
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="signup-country" className={authLabelClass}>الدولة</label>
-              <select {...inputProps("country")} autoComplete="country">
-                {COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
-              </select>
+      <form onSubmit={submit} className="space-y-7" noValidate>
+        <FormSection step={1} title="بيانات المنشأة" hint="كما في السجل التجاري">
+          <Field id="signup-name_ar" label="اسم المنشأة" required error={errors.name_ar} wide>
+            <TextInput {...input("name_ar")} icon={Building2} required autoComplete="organization" placeholder="مثال: مؤسسة الريادة للتجارة" />
+          </Field>
+          <Field id="signup-employees_range" label="عدد الموظفين">
+            <SelectInput {...input("employees_range")} icon={Users}>
+              <option value="">اختر العدد التقريبي</option>
+              {EMPLOYEE_RANGES.map((range) => <option key={range.value} value={range.value}>{range.label}</option>)}
+            </SelectInput>
+          </Field>
+          <Field id="signup-cr_number" label="السجل التجاري" error={errors.cr_number}>
+            <TextInput {...input("cr_number")} icon={FileText} dir="ltr" inputMode={isSaudi ? "numeric" : "text"} placeholder={isSaudi ? "10 أرقام" : "رقم السجل في دولتك"} />
+          </Field>
+        </FormSection>
+
+        <FormSection step={2} title="العنوان" hint="يظهر على فواتير المنشأة ومستنداتها">
+          <Field
+            id="signup-country"
+            label="الدولة"
+            required
+            error={errors.country}
+            hint={isSaudi ? "تُفعَّل لمنشأتك الفوترة الإلكترونية للهيئة والتأمينات الاجتماعية والإقرار الضريبي." : undefined}
+          >
+            <SelectInput id="signup-country" value={form.country} onChange={(event) => changeCountry(event.target.value)} disabled={loading} error={errors.country} hint={isSaudi ? "country" : undefined} icon={Globe} required autoComplete="country">
+              {COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
+            </SelectInput>
+          </Field>
+          <Field id="signup-region" label={isSaudi ? "المنطقة" : "المنطقة / الولاية"} required error={errors.region}>
+            {isSaudi ? (
+              <SelectInput {...input("region")} icon={MapPin} required>
+                <option value="">اختر المنطقة</option>
+                {SAUDI_REGIONS.map((region) => <option key={region} value={region}>{region}</option>)}
+              </SelectInput>
+            ) : (
+              <TextInput {...input("region")} icon={MapPin} required autoComplete="address-level1" placeholder="المنطقة أو الولاية أو المحافظة" />
+            )}
+          </Field>
+          <Field id="signup-city" label="المدينة">
+            <TextInput {...input("city")} icon={MapPin} autoComplete="address-level2" placeholder={isSaudi ? "مثال: الرياض" : "المدينة"} />
+          </Field>
+          <Field id="signup-address_ar" label={isSaudi ? "العنوان الوطني" : "العنوان الداخلي"}>
+            <TextInput {...input("address_ar")} autoComplete="street-address" placeholder={isSaudi ? "رقم المبنى، الشارع، الحي، الرمز البريدي" : "الشارع، الحي، الرمز البريدي"} />
+          </Field>
+          {!isSaudi ? (
+            <div className="sm:col-span-2">
+              <Notice tone="success">
+                منشأتك خارج السعودية: لن تظهر لك الأنظمة السعودية (الفوترة الإلكترونية للهيئة، والتأمينات الاجتماعية، والإقرار الضريبي والزكاة).
+                الفوترة (فواتير المبيعات والمشتريات وإشعاراتها) والضريبة بالنسبة التي تحددها حسب دولتك تُفعَّل في تحديث قادم.
+                حتى ذلك الحين تعمل الأقسام الأخرى: عروض الأسعار وأوامر البيع والشراء، والمخزون، والقيود المحاسبية، والموارد البشرية والرواتب، والعملاء والموردون.
+              </Notice>
             </div>
-            <div>
-              <label htmlFor="signup-employees_range" className={authLabelClass}>عدد الموظفين</label>
-              <select {...inputProps("employees_range")}>
-                <option value="">اختر العدد التقريبي</option>
-                {EMPLOYEE_RANGES.map((range) => <option key={range.value} value={range.value}>{range.label}</option>)}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label htmlFor="signup-cr_number" className={authLabelClass}>السجل التجاري</label>
-            <input {...inputProps("cr_number")} dir="ltr" inputMode={isSaudi ? "numeric" : "text"} placeholder={isSaudi ? "10 أرقام" : "رقم السجل في دولتك"} />
-            {fieldError("cr_number")}
-          </div>
-          {isSaudi ? (
-            <p className="text-[13px] leading-6" style={{ color: AUTH_COLORS.muted }}>
-              منشأتك في السعودية: تحصل على الفوترة الإلكترونية المتوافقة مع هيئة الزكاة والضريبة والجمارك، والتأمينات الاجتماعية في الرواتب، والإقرار الضريبي.
+          ) : null}
+        </FormSection>
+
+        <FormSection step={3} title="التسجيل الضريبي" hint={isSaudi ? "في هيئة الزكاة والضريبة والجمارك" : "في دولة المنشأة"}>
+          <div className="sm:col-span-2">
+            <p id="signup-vat-question" className="mb-2 text-[14px] font-medium" style={{ color: "#23423A" }}>
+              {isSaudi ? "هل المنشأة مسجّلة في هيئة الزكاة والضريبة والجمارك؟" : "هل المنشأة مسجّلة ضريبيًا في دولتها؟"}
+              <span className="text-[#C9372C]" aria-hidden="true"> *</span>
+              <span className="sr-only"> (إلزامي)</span>
             </p>
-          ) : (
-            <div className={authNoteClass} style={{ background: AUTH_COLORS.mint, borderColor: "#BFDCCD", color: AUTH_COLORS.ink }}>
-              منشأتك خارج السعودية: لن تظهر لك الأنظمة السعودية (الفوترة الإلكترونية للهيئة، والتأمينات الاجتماعية، والإقرار الضريبي والزكاة).
-              الفوترة (فواتير المبيعات والمشتريات وإشعاراتها) والضريبة بالنسبة التي تحددها حسب دولتك تُفعَّل في تحديث قادم.
-              حتى ذلك الحين تعمل الأقسام الأخرى: عروض الأسعار وأوامر البيع والشراء، والمخزون، والقيود المحاسبية، والموارد البشرية والرواتب، والعملاء والموردون.
-            </div>
-          )}
-        </fieldset>
+            <ChoiceCards<YesNo>
+              name="signup-vat_registered"
+              labelledBy="signup-vat-question"
+              value={form.vat_registered}
+              onChange={(value) => set("vat_registered", value)}
+              disabled={loading}
+              error={errors.vat_registered}
+              options={[
+                { value: "yes", label: "نعم، مسجّلة", detail: isSaudi ? "لديها رقم ضريبي من الهيئة" : "لديها رقم تسجيل ضريبي" },
+                { value: "no", label: "غير مسجّلة", detail: isSaudi ? "لا تصدر فواتير المبيعات حتى يُضاف الرقم" : "يمكن إضافة الرقم الضريبي لاحقًا" },
+              ]}
+            />
+            {errors.vat_registered ? <p id="signup-vat_registered-error" className="mt-1.5 text-[13px] text-[#B42318]">{errors.vat_registered}</p> : null}
+          </div>
+          {form.vat_registered === "yes" ? (
+            <Field
+              id="signup-vat_number"
+              label="الرقم الضريبي"
+              required
+              error={errors.vat_number}
+              hint={isSaudi ? "15 رقمًا يبدأ وينتهي بالرقم 3، كما في شهادة التسجيل" : "كما في شهادة التسجيل الضريبي"}
+              wide
+            >
+              <TextInput
+                {...input("vat_number")}
+                icon={Hash}
+                required
+                hint={isSaudi ? "15 رقمًا" : "شهادة التسجيل"}
+                dir="ltr"
+                inputMode={isSaudi ? "numeric" : "text"}
+                placeholder={isSaudi ? "3XXXXXXXXXXXXX3" : ""}
+              />
+            </Field>
+          ) : form.vat_registered === "no" && isSaudi ? (
+            <p className="text-[13px] leading-6 sm:col-span-2" style={{ color: AUTH_COLORS.muted }}>
+              لا تصدر فواتير المبيعات وإشعاراتها حتى تضيف إدارة المنصة الرقم الضريبي لمنشأتك بعد تسجيلك في الهيئة.
+            </p>
+          ) : null}
+        </FormSection>
 
-        <fieldset className="space-y-4">
-          <legend className="mb-1 text-[16px] font-bold" style={{ color: AUTH_COLORS.ink }}>التواصل وحساب الدخول</legend>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="signup-phone" className={authLabelClass}>رقم الجوال{required}</label>
-              <input {...inputProps("phone")} type="tel" dir="ltr" inputMode="tel" autoComplete="tel" placeholder={isSaudi ? "05XXXXXXXX" : `${dial} ...`} />
-              {fieldError("phone")}
-            </div>
-            <div>
-              <label htmlFor="signup-email" className={authLabelClass}>البريد الإلكتروني{required}</label>
-              <input {...inputProps("email")} type="email" dir="ltr" autoComplete="email" placeholder="owner@company.com" />
-              {fieldError("email")}
-            </div>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label htmlFor="signup-password" className={authLabelClass}>كلمة المرور{required}</label>
-              <div className="relative">
-                <input {...inputProps("password")} type={showPassword ? "text" : "password"} autoComplete="new-password" placeholder="8 أحرف على الأقل" className={`${inputProps("password").className} pl-11`} />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((value) => !value)}
-                  aria-label={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
-                  className="absolute left-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-[#7C918A] hover:text-[#24443A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#14775A]/40"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-              {fieldError("password")}
-            </div>
-            <div>
-              <label htmlFor="signup-confirm" className={authLabelClass}>تأكيد كلمة المرور{required}</label>
-              <input {...inputProps("confirm")} type={showPassword ? "text" : "password"} autoComplete="new-password" />
-              {fieldError("confirm")}
-            </div>
-          </div>
-          <p className="text-[13px] leading-6" style={{ color: AUTH_COLORS.muted }}>
-            البريد هو حساب دخول صاحب المنشأة ومدير النظام فيها، ويصله رابط تأكيد. الحقول المعلَّمة بنجمة إلزامية.
+        <FormSection step={4} title="حساب الدخول" hint="حساب صاحب المنشأة ومدير النظام فيها">
+          <Field id="signup-phone" label="رقم الجوال" required error={errors.phone}>
+            <TextInput {...input("phone")} icon={Phone} required type="tel" dir="ltr" inputMode="tel" autoComplete="tel" placeholder={isSaudi ? "05XXXXXXXX" : `${dial} ...`} />
+          </Field>
+          <Field id="signup-email" label="البريد الإلكتروني" required error={errors.email}>
+            <TextInput {...input("email")} icon={Mail} required type="email" dir="ltr" autoComplete="email" placeholder="owner@company.com" />
+          </Field>
+          <Field id="signup-password" label="كلمة المرور" required error={errors.password} hint="8 أحرف على الأقل">
+            <PasswordInput {...input("password")} icon={Lock} required hint="8 أحرف على الأقل" autoComplete="new-password" />
+          </Field>
+          <Field id="signup-confirm" label="تأكيد كلمة المرور" required error={errors.confirm}>
+            <PasswordInput {...input("confirm")} icon={Lock} required autoComplete="new-password" />
+          </Field>
+        </FormSection>
+
+        <div className="space-y-3 border-t pt-7" style={{ borderColor: AUTH_COLORS.line }}>
+          <button type="submit" disabled={loading} className={primaryButtonClass}>
+            {loading ? "جاري إنشاء الحساب..." : "أنشئ حساب المنشأة"}
+          </button>
+          <p className="text-center text-[13px] leading-6" style={{ color: AUTH_COLORS.muted }}>
+            سنرسل رابط تأكيد إلى بريدك. الحقول المعلّمة بنجمة إلزامية.
           </p>
-        </fieldset>
-
-        <button type="submit" disabled={loading} className={authButtonClass} style={authButtonStyle}>
-          {loading ? "جاري إنشاء الحساب..." : "أنشئ حساب المنشأة"}
-        </button>
+        </div>
       </form>
     </AuthShell>
   );

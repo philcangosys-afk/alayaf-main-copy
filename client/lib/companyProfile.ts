@@ -41,6 +41,8 @@ export type CompanyRecord = {
   country?: string;
   /** فئة عدد الموظفين من التسجيل (S14) */
   employees_range?: string | null;
+  /** المنطقة / الولاية (S14) */
+  region?: string;
 };
 
 export type ZatcaPhase = "phase1" | "phase2";

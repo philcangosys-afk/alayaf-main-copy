@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { KeyRound } from "lucide-react";
+import { KeyRound, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
-import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authInputClass, authLabelClass, authLinkClass } from "@/components/AuthShell";
+import AuthShell, { AUTH_COLORS } from "@/components/AuthShell";
+import { Field, PasswordInput, StatusIcon, linkClass, primaryButtonClass } from "@/components/AuthForm";
 
 type Phase = "checking" | "ready" | "invalid";
 
@@ -99,20 +100,21 @@ export default function ResetPassword() {
 
   if (phase === "invalid") {
     return (
-      <AuthShell title="الرابط غير صالح أو انتهت صلاحيته" footer={<p><Link to="/login" className={authLinkClass}>الذهاب إلى تسجيل الدخول</Link></p>}>
-        <div className="flex items-start gap-4">
-          <KeyRound className="mt-1 h-9 w-9 shrink-0 text-[#B42318]" aria-hidden="true" />
-          <p className="text-[15px] leading-8" style={{ color: AUTH_COLORS.text }}>
-            اطلب رابطًا جديدًا من صفحة الدخول بالضغط على «نسيت كلمة المرور؟»، واستخدم أحدث رسالة تصلك.
-          </p>
-        </div>
+      <AuthShell
+        icon={<StatusIcon icon={KeyRound} tone="danger" />}
+        title="الرابط غير صالح أو انتهت صلاحيته"
+        footer={<p><Link to="/login" className={linkClass}>الذهاب إلى تسجيل الدخول</Link></p>}
+      >
+        <p className="text-[15px] leading-8" style={{ color: AUTH_COLORS.text }}>
+          اطلب رابطًا جديدًا من صفحة الدخول بالضغط على «نسيت كلمة المرور؟»، واستخدم أحدث رسالة تصلك.
+        </p>
       </AuthShell>
     );
   }
 
   if (phase === "checking") {
     return (
-      <AuthShell title="تعيين كلمة مرور جديدة">
+      <AuthShell icon={<StatusIcon icon={KeyRound} />} title="تعيين كلمة مرور جديدة">
         <p className="text-[15px]" style={{ color: AUTH_COLORS.muted }}>جاري التحقق من الرابط...</p>
       </AuthShell>
     );
@@ -120,24 +122,18 @@ export default function ResetPassword() {
 
   return (
     <AuthShell
+      icon={<StatusIcon icon={KeyRound} />}
       title="تعيين كلمة مرور جديدة"
-      subtitle={email ? undefined : "اختر كلمة مرور جديدة لحسابك"}
+      subtitle={email ? <>الحساب: <span dir="ltr" className="font-semibold" style={{ color: AUTH_COLORS.text }}>{email}</span></> : "اختر كلمة مرور جديدة لحسابك"}
     >
-      {email ? (
-        <p className="text-[14px]" style={{ color: AUTH_COLORS.muted }}>
-          الحساب: <span dir="ltr" className="font-semibold" style={{ color: AUTH_COLORS.text }}>{email}</span>
-        </p>
-      ) : null}
       <form onSubmit={submit} className="space-y-5">
-        <div>
-          <label htmlFor="reset-password" className={authLabelClass}>كلمة المرور الجديدة</label>
-          <input id="reset-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} className={authInputClass} placeholder="8 أحرف على الأقل" disabled={saving} autoComplete="new-password" />
-        </div>
-        <div>
-          <label htmlFor="reset-confirm" className={authLabelClass}>تأكيد كلمة المرور</label>
-          <input id="reset-confirm" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className={authInputClass} disabled={saving} autoComplete="new-password" />
-        </div>
-        <button type="submit" disabled={saving} className={authButtonClass} style={authButtonStyle}>
+        <Field id="reset-password" label="كلمة المرور الجديدة" hint="8 أحرف على الأقل">
+          <PasswordInput id="reset-password" icon={Lock} value={password} onChange={(e) => setPassword(e.target.value)} hint="8 أحرف على الأقل" disabled={saving} autoComplete="new-password" />
+        </Field>
+        <Field id="reset-confirm" label="تأكيد كلمة المرور">
+          <PasswordInput id="reset-confirm" icon={Lock} value={confirm} onChange={(e) => setConfirm(e.target.value)} disabled={saving} autoComplete="new-password" />
+        </Field>
+        <button type="submit" disabled={saving} className={primaryButtonClass}>
           {saving ? "جاري الحفظ..." : "حفظ كلمة المرور"}
         </button>
       </form>

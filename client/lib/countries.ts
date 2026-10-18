@@ -45,6 +45,23 @@ export const COUNTRIES: Country[] = [
 export const countryName = (code: string | null | undefined) =>
   COUNTRIES.find((country) => country.code === String(code ?? "").toUpperCase())?.name ?? String(code ?? "");
 
+/** مناطق المملكة الإدارية الثلاث عشرة (تُحفظ بالاسم في companies.region) */
+export const SAUDI_REGIONS: string[] = [
+  "منطقة الرياض",
+  "منطقة مكة المكرمة",
+  "منطقة المدينة المنورة",
+  "المنطقة الشرقية",
+  "منطقة القصيم",
+  "منطقة عسير",
+  "منطقة تبوك",
+  "منطقة حائل",
+  "منطقة الحدود الشمالية",
+  "منطقة جازان",
+  "منطقة نجران",
+  "منطقة الباحة",
+  "منطقة الجوف",
+];
+
 /** فئات عدد الموظفين كما تُحفظ في companies.employees_range */
 export const EMPLOYEE_RANGES: Array<{ value: string; label: string }> = [
   { value: "1-10", label: "من 1 إلى 10" },
@@ -70,6 +87,12 @@ export const isValidPhone = (value: string) => /^\+?\d{8,15}$/.test(normalizePho
 
 /** الرقم الضريبي والسجل: أرقام لاتينية بلا مسافات */
 export const normalizeIdentifier = (value: string) => latinDigits(value).replace(/\s/g, "");
+
+/** صيغ الرقم الضريبي والسجل (نفس فحص الخادم company_identity_check) */
+export const isSaudiVat = (value: string) => /^3\d{13}3$/.test(value);
+export const isSaudiCr = (value: string) => /^\d{10}$/.test(value);
+export const isForeignVat = (value: string) => /^[A-Za-z0-9-]{3,20}$/.test(value) && /[A-Za-z0-9]/.test(value);
+export const isForeignCr = (value: string) => /^[A-Za-z0-9/-]{1,30}$/.test(value) && /[A-Za-z0-9]/.test(value);
 
 /** رسالة رفض الفوترة لمنشأة خارج السعودية حتى ملف الضريبة حسب الدولة (BILLING_COUNTRY_NOT_READY) */
 export const BILLING_COUNTRY_MESSAGE =

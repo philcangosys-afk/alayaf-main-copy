@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
+import { Building2, FileText, Globe, Hash, Mail, MapPin, Phone, UserRound, Users } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabaseClient";
 import { useCompany } from "@/lib/companyContext";
-import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authInputClass, authLabelClass, authLinkClass, authNoteClass } from "@/components/AuthShell";
-import { COUNTRIES, EMPLOYEE_RANGES, SAUDI_COUNTRY_CODE, isValidPhone, normalizeIdentifier, normalizePhone } from "@/lib/countries";
+import AuthShell, { AUTH_COLORS } from "@/components/AuthShell";
+import { ChoiceCards, Field, FormSection, Notice, SelectInput, TextInput, linkClass, primaryButtonClass } from "@/components/AuthForm";
+import {
+  COUNTRIES, EMPLOYEE_RANGES, SAUDI_COUNTRY_CODE, SAUDI_REGIONS, isForeignCr, isForeignVat, isSaudiCr, isSaudiVat, isValidPhone, normalizeIdentifier, normalizePhone,
+} from "@/lib/countries";
 
 const REGISTER_ERRORS: Record<string, string> = {
   LOGIN_REQUIRED: "سجّل الدخول أولًا",
@@ -12,11 +16,14 @@ const REGISTER_ERRORS: Record<string, string> = {
   ALREADY_COMPANY_MEMBER: "حسابك مرتبط بمنشأة بالفعل",
   PLATFORM_ADMIN_CANNOT_REGISTER: "حساب إدارة المنصة لا يسجّل منشأة",
   COMPANY_NAME_REQUIRED: "اسم المنشأة مطلوب",
+  COMPANY_VAT_REQUIRED: "اكتب الرقم الضريبي للمنشأة المسجّلة ضريبيًا",
   COMPANY_VAT_INVALID: "الرقم الضريبي غير صحيح (في السعودية 15 رقمًا يبدأ وينتهي بالرقم 3)",
   COMPANY_CR_INVALID: "السجل التجاري غير صحيح (في السعودية 10 أرقام)",
   COMPANY_PHONE_REQUIRED: "رقم الجوال مطلوب",
   COMPANY_PHONE_INVALID: "رقم الجوال من 8 إلى 15 رقمًا",
   COMPANY_COUNTRY_INVALID: "اختر دولة المنشأة من القائمة",
+  COMPANY_REGION_REQUIRED: "المنطقة مطلوبة",
+  COMPANY_REGION_INVALID: "المنطقة 100 حرف على الأكثر",
   COMPANY_EMPLOYEES_INVALID: "اختر عدد الموظفين من القائمة",
   EMAIL_ALREADY_OWNS_COMPANY: "هذا البريد مسجّل لمنشأة أخرى",
   COMPANY_VAT_ALREADY_REGISTERED: "هذا الرقم الضريبي مسجّل لمنشأة أخرى",
@@ -27,8 +34,6 @@ const FOREIGN_ID_ERRORS: Record<string, string> = {
   COMPANY_VAT_INVALID: "الرقم الضريبي حروف لاتينية وأرقام وشرطة، من 3 إلى 20 حرفًا",
   COMPANY_CR_INVALID: "السجل التجاري حروف لاتينية وأرقام (ويُقبل / و-)، حتى 30 حرفًا",
 };
-const isForeignVat = (value: string) => /^[A-Za-z0-9-]{3,20}$/.test(value) && /[A-Za-z0-9]/.test(value);
-const isForeignCr = (value: string) => /^[A-Za-z0-9/-]{1,30}$/.test(value) && /[A-Za-z0-9]/.test(value);
 
 const registerErrorText = (message: string, saudi = true) => {
   const key = Object.keys(REGISTER_ERRORS).find((code) => message.includes(code));
@@ -36,36 +41,45 @@ const registerErrorText = (message: string, saudi = true) => {
   return key ? REGISTER_ERRORS[key] : "تعذر تسجيل المنشأة، حاول مرة أخرى";
 };
 
+type YesNo = "yes" | "no";
+
 type Form = {
   name_ar: string;
   name_en: string;
-  country: string;
   employees_range: string;
-  vat_number: string;
   cr_number: string;
-  phone: string;
-  email: string;
+  country: string;
+  region: string;
   city: string;
   address_ar: string;
   address_en: string;
+  vat_registered: YesNo | null;
+  vat_number: string;
+  phone: string;
+  email: string;
   contact_name: string;
 };
 
+type FieldKey = keyof Form;
+
+const FIELD_ORDER: FieldKey[] = ["name_ar", "name_en", "employees_range", "cr_number", "country", "region", "city", "address_ar", "address_en", "vat_registered", "vat_number", "phone", "email", "contact_name"];
+
 const emptyForm: Form = {
-  name_ar: "", name_en: "", country: SAUDI_COUNTRY_CODE, employees_range: "", vat_number: "", cr_number: "", phone: "",
-  email: "", city: "", address_ar: "", address_en: "", contact_name: "",
+  name_ar: "", name_en: "", employees_range: "", cr_number: "", country: SAUDI_COUNTRY_CODE, region: "", city: "", address_ar: "", address_en: "",
+  vat_registered: null, vat_number: "", phone: "", email: "", contact_name: "",
 };
 
 const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 
 /**
- * إرسال بيانات المنشأة للموافقة (بعد تأكيد البريد والدخول): تُنشأ بحالة «بانتظار الموافقة».
- * البيانات التي أُدخلت في صفحة التسجيل محفوظة مع الحساب (signup_company) وتُعبّأ هنا تلقائيًا.
+ * إكمال تسجيل المنشأة (بعد تأكيد البريد والدخول): تُنشأ بحالة «بانتظار الموافقة».
+ * ما أُدخل في صفحة التسجيل محفوظ مع الحساب (signup_company) ويُعبّأ هنا تلقائيًا.
  */
 export default function RegisterCompany() {
   const navigate = useNavigate();
   const company = useCompany();
   const [form, setForm] = useState<Form>(emptyForm);
+  const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({});
   const [saving, setSaving] = useState(false);
   const [prefilled, setPrefilled] = useState(false);
 
@@ -76,12 +90,18 @@ export default function RegisterCompany() {
       const saved = (data.user?.user_metadata?.signup_company ?? null) as Record<string, unknown> | null;
       if (!saved) return;
       const country = text(saved.country).toUpperCase();
+      const registered = typeof saved.vat_registered === "boolean" ? saved.vat_registered : text(saved.vat_number) ? true : null;
       setForm((prev) => ({
         ...prev,
         name_ar: prev.name_ar || text(saved.name_ar),
         cr_number: prev.cr_number || text(saved.cr_number),
         employees_range: prev.employees_range || text(saved.employees_range),
         country: COUNTRIES.some((item) => item.code === country) ? country : prev.country,
+        region: prev.region || text(saved.region),
+        city: prev.city || text(saved.city),
+        address_ar: prev.address_ar || text(saved.address_ar),
+        vat_registered: prev.vat_registered ?? (registered === null ? null : registered ? "yes" : "no"),
+        vat_number: prev.vat_number || text(saved.vat_number),
         phone: prev.phone || text(saved.phone),
       }));
       setPrefilled(true);
@@ -94,42 +114,67 @@ export default function RegisterCompany() {
   }
 
   const isSaudi = form.country === SAUDI_COUNTRY_CODE;
-  const set = (key: keyof Form, value: string) => setForm((prev) => ({ ...prev, [key]: value }));
+  const dial = COUNTRIES.find((country) => country.code === form.country)?.dial ?? "";
+  const set = <K extends FieldKey>(key: K, value: Form[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+    setErrors((prev) => ({ ...prev, [key]: undefined }));
+  };
+  const changeCountry = (country: string) => {
+    // تُفرَّغ المنطقة عند الانتقال من السعودية أو إليها فقط (قائمة المناطق ↔ نص)
+    setForm((prev) => ({ ...prev, country, region: (country === SAUDI_COUNTRY_CODE) === (prev.country === SAUDI_COUNTRY_CODE) ? prev.region : "" }));
+    setErrors((prev) => ({ ...prev, country: undefined, region: undefined, vat_number: undefined, cr_number: undefined }));
+  };
+
+  const validate = (): Partial<Record<FieldKey, string>> => {
+    const next: Partial<Record<FieldKey, string>> = {};
+    if (!form.name_ar.trim()) next.name_ar = "اكتب اسم المنشأة";
+    const cr = normalizeIdentifier(form.cr_number.trim());
+    if (cr && isSaudi && !isSaudiCr(cr)) next.cr_number = "السجل التجاري في السعودية 10 أرقام";
+    if (cr && !isSaudi && !isForeignCr(cr)) next.cr_number = FOREIGN_ID_ERRORS.COMPANY_CR_INVALID;
+    if (!form.region.trim()) next.region = isSaudi ? "اختر المنطقة" : "اكتب المنطقة أو الولاية";
+    else if (form.region.trim().length > 100) next.region = REGISTER_ERRORS.COMPANY_REGION_INVALID;
+    if (!form.vat_registered) next.vat_registered = "حدد هل المنشأة مسجّلة ضريبيًا";
+    if (form.vat_registered === "yes") {
+      const vat = normalizeIdentifier(form.vat_number.trim());
+      if (!vat) next.vat_number = "اكتب الرقم الضريبي";
+      else if (isSaudi && !isSaudiVat(vat)) next.vat_number = "الرقم الضريبي 15 رقمًا يبدأ وينتهي بالرقم 3";
+      else if (!isSaudi && !isForeignVat(vat)) next.vat_number = FOREIGN_ID_ERRORS.COMPANY_VAT_INVALID;
+    }
+    if (!form.phone.trim()) next.phone = "اكتب رقم الجوال";
+    else if (!isValidPhone(form.phone)) next.phone = REGISTER_ERRORS.COMPANY_PHONE_INVALID;
+    if (form.email.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) next.email = "البريد الإلكتروني غير صحيح";
+    return next;
+  };
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    const payload = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v.trim()])) as Form;
-    payload.phone = normalizePhone(payload.phone);
-    payload.vat_number = normalizeIdentifier(payload.vat_number);
-    payload.cr_number = normalizeIdentifier(payload.cr_number);
-    if (!payload.name_ar) {
-      toast.error("اسم المنشأة مطلوب");
+    const found = validate();
+    setErrors(found);
+    const firstKey = FIELD_ORDER.find((key) => found[key]);
+    if (firstKey) {
+      const target = firstKey === "vat_registered"
+        ? document.querySelector<HTMLInputElement>('input[name="register-vat_registered"]')
+        : document.getElementById(`register-${firstKey}`);
+      target?.focus();
       return;
     }
-    if (!payload.phone) {
-      toast.error(REGISTER_ERRORS.COMPANY_PHONE_REQUIRED);
-      return;
-    }
-    if (!isValidPhone(payload.phone)) {
-      toast.error(REGISTER_ERRORS.COMPANY_PHONE_INVALID);
-      return;
-    }
-    if (isSaudi && payload.vat_number && !/^3\d{13}3$/.test(payload.vat_number)) {
-      toast.error(REGISTER_ERRORS.COMPANY_VAT_INVALID);
-      return;
-    }
-    if (isSaudi && payload.cr_number && !/^\d{10}$/.test(payload.cr_number)) {
-      toast.error(REGISTER_ERRORS.COMPANY_CR_INVALID);
-      return;
-    }
-    if (!isSaudi && payload.vat_number && !isForeignVat(payload.vat_number)) {
-      toast.error(FOREIGN_ID_ERRORS.COMPANY_VAT_INVALID);
-      return;
-    }
-    if (!isSaudi && payload.cr_number && !isForeignCr(payload.cr_number)) {
-      toast.error(FOREIGN_ID_ERRORS.COMPANY_CR_INVALID);
-      return;
-    }
+    const registered = form.vat_registered === "yes";
+    const payload = {
+      name_ar: form.name_ar.trim(),
+      name_en: form.name_en.trim(),
+      employees_range: form.employees_range,
+      cr_number: normalizeIdentifier(form.cr_number.trim()),
+      country: form.country,
+      region: form.region.trim(),
+      city: form.city.trim(),
+      address_ar: form.address_ar.trim(),
+      address_en: form.address_en.trim(),
+      vat_registered: registered,
+      vat_number: registered ? normalizeIdentifier(form.vat_number.trim()) : "",
+      phone: normalizePhone(form.phone),
+      email: form.email.trim(),
+      contact_name: form.contact_name.trim(),
+    };
     setSaving(true);
     try {
       const { error } = await supabase.rpc("register_company", { p: payload });
@@ -145,82 +190,136 @@ export default function RegisterCompany() {
     }
   };
 
-  const field = (key: keyof Form, label: string, opts: { ltr?: boolean; placeholder?: string; required?: boolean; type?: string } = {}) => (
-    <div>
-      <label htmlFor={`register-${key}`} className={authLabelClass}>
-        {label}
-        {opts.required ? <span className="text-[#B42318]" aria-hidden="true"> *</span> : null}
-      </label>
-      <input
-        id={`register-${key}`}
-        type={opts.type ?? "text"}
-        value={form[key]}
-        onChange={(e) => set(key, e.target.value)}
-        className={authInputClass}
-        dir={opts.ltr ? "ltr" : "rtl"}
-        placeholder={opts.placeholder}
-        aria-required={opts.required ? true : undefined}
-        disabled={saving}
-      />
-    </div>
-  );
+  const input = (key: Exclude<FieldKey, "vat_registered">) => ({
+    id: `register-${key}`,
+    value: form[key] as string,
+    onChange: (event: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => set(key, event.target.value),
+    disabled: saving,
+    error: errors[key],
+  });
 
   return (
     <AuthShell
       wide
       title="أكمل تسجيل منشأتك"
-      subtitle={prefilled ? "عبّأنا ما أدخلته عند التسجيل. راجعه وأضف ما تريد، ثم أرسل الطلب لموافقة إدارة المنصة." : "أدخل بيانات منشأتك ثم أرسل الطلب لموافقة إدارة المنصة."}
+      subtitle={prefilled ? "عبّأنا ما أدخلته عند التسجيل. راجعه وأكمل ما ينقص، ثم أرسل الطلب لموافقة إدارة المنصة." : "أدخل بيانات منشأتك ثم أرسل الطلب لموافقة إدارة المنصة."}
       footer={
-        <button type="button" onClick={() => void supabase.auth.signOut().then(() => navigate("/login", { replace: true }))} className={authLinkClass}>
+        <button type="button" onClick={() => void supabase.auth.signOut().then(() => navigate("/login", { replace: true }))} className={linkClass}>
           تسجيل الخروج
         </button>
       }
     >
       {company.lastRejection ? (
-        <div className={authNoteClass} style={{ background: "#FEF3F2", borderColor: "#FECDCA", color: "#912018" }}>
+        <Notice tone="danger">
           لم يُقبل طلبك السابق{company.lastRejection.name_ar ? ` (${company.lastRejection.name_ar})` : ""}
           {company.lastRejection.reason ? `: ${company.lastRejection.reason}` : "."} يمكنك التسجيل من جديد بعد تصحيح البيانات.
-        </div>
+        </Notice>
       ) : null}
-      <form onSubmit={submit} className="space-y-6" noValidate>
-        <div className="grid gap-4 sm:grid-cols-2">
-          {field("name_ar", "اسم المنشأة بالعربية", { required: true })}
-          {field("name_en", "اسم المنشأة بالإنجليزية", { ltr: true })}
-          <div>
-            <label htmlFor="register-country" className={authLabelClass}>الدولة</label>
-            <select id="register-country" value={form.country} onChange={(e) => set("country", e.target.value)} className={authInputClass} disabled={saving}>
-              {COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label htmlFor="register-employees_range" className={authLabelClass}>عدد الموظفين</label>
-            <select id="register-employees_range" value={form.employees_range} onChange={(e) => set("employees_range", e.target.value)} className={authInputClass} disabled={saving}>
+      <form onSubmit={submit} className="space-y-7" noValidate>
+        <FormSection step={1} title="بيانات المنشأة" hint={isSaudi ? "الاسم والرقم الضريبي والسجل تظهر على الفواتير الضريبية، ولا تُعدَّل بعد الموافقة إلا عن طريق إدارة المنصة" : "كما في السجل التجاري"}>
+          <Field id="register-name_ar" label="اسم المنشأة بالعربية" required error={errors.name_ar}>
+            <TextInput {...input("name_ar")} icon={Building2} required autoComplete="organization" />
+          </Field>
+          <Field id="register-name_en" label="اسم المنشأة بالإنجليزية">
+            <TextInput {...input("name_en")} icon={Building2} dir="ltr" />
+          </Field>
+          <Field id="register-employees_range" label="عدد الموظفين">
+            <SelectInput {...input("employees_range")} icon={Users}>
               <option value="">اختر العدد التقريبي</option>
               {EMPLOYEE_RANGES.map((range) => <option key={range.value} value={range.value}>{range.label}</option>)}
-            </select>
+            </SelectInput>
+          </Field>
+          <Field id="register-cr_number" label="السجل التجاري" error={errors.cr_number}>
+            <TextInput {...input("cr_number")} icon={FileText} dir="ltr" inputMode={isSaudi ? "numeric" : "text"} placeholder={isSaudi ? "10 أرقام" : "رقم السجل في دولتك"} />
+          </Field>
+        </FormSection>
+
+        <FormSection step={2} title="العنوان" hint="يظهر على فواتير المنشأة ومستنداتها">
+          <Field id="register-country" label="الدولة" required>
+            <SelectInput id="register-country" value={form.country} onChange={(event) => changeCountry(event.target.value)} disabled={saving} icon={Globe} required autoComplete="country">
+              {COUNTRIES.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
+            </SelectInput>
+          </Field>
+          <Field id="register-region" label={isSaudi ? "المنطقة" : "المنطقة / الولاية"} required error={errors.region}>
+            {isSaudi ? (
+              <SelectInput {...input("region")} icon={MapPin} required>
+                <option value="">اختر المنطقة</option>
+                {/* قيمة محفوظة من قبل ليست في القائمة تبقى ظاهرة */}
+                {form.region && !SAUDI_REGIONS.includes(form.region) ? <option value={form.region}>{form.region}</option> : null}
+                {SAUDI_REGIONS.map((region) => <option key={region} value={region}>{region}</option>)}
+              </SelectInput>
+            ) : (
+              <TextInput {...input("region")} icon={MapPin} required autoComplete="address-level1" placeholder="المنطقة أو الولاية أو المحافظة" />
+            )}
+          </Field>
+          <Field id="register-city" label="المدينة">
+            <TextInput {...input("city")} icon={MapPin} autoComplete="address-level2" />
+          </Field>
+          <Field id="register-address_ar" label={isSaudi ? "العنوان الوطني" : "العنوان الداخلي"}>
+            <TextInput {...input("address_ar")} autoComplete="street-address" placeholder={isSaudi ? "رقم المبنى، الشارع، الحي، الرمز البريدي" : "الشارع، الحي، الرمز البريدي"} />
+          </Field>
+          <Field id="register-address_en" label="العنوان بالإنجليزية" wide>
+            <TextInput {...input("address_en")} dir="ltr" />
+          </Field>
+          {!isSaudi ? (
+            <div className="sm:col-span-2">
+              <Notice tone="success">
+                منشأتك خارج السعودية: لن تظهر لك الأنظمة السعودية (الفوترة الإلكترونية للهيئة، والتأمينات الاجتماعية، والإقرار الضريبي والزكاة).
+                الفوترة (فواتير المبيعات والمشتريات وإشعاراتها) والضريبة بالنسبة التي تحددها حسب دولتك تُفعَّل في تحديث قادم.
+              </Notice>
+            </div>
+          ) : null}
+        </FormSection>
+
+        <FormSection step={3} title="التسجيل الضريبي" hint={isSaudi ? "في هيئة الزكاة والضريبة والجمارك" : "في دولة المنشأة"}>
+          <div className="sm:col-span-2">
+            <p id="register-vat-question" className="mb-2 text-[14px] font-medium" style={{ color: "#23423A" }}>
+              {isSaudi ? "هل المنشأة مسجّلة في هيئة الزكاة والضريبة والجمارك؟" : "هل المنشأة مسجّلة ضريبيًا في دولتها؟"}
+              <span className="text-[#C9372C]" aria-hidden="true"> *</span>
+              <span className="sr-only"> (إلزامي)</span>
+            </p>
+            <ChoiceCards<YesNo>
+              name="register-vat_registered"
+              labelledBy="register-vat-question"
+              value={form.vat_registered}
+              onChange={(value) => set("vat_registered", value)}
+              disabled={saving}
+              error={errors.vat_registered}
+              options={[
+                { value: "yes", label: "نعم، مسجّلة", detail: isSaudi ? "لديها رقم ضريبي من الهيئة" : "لديها رقم تسجيل ضريبي" },
+                { value: "no", label: "غير مسجّلة", detail: isSaudi ? "لا تصدر فواتير المبيعات حتى يُضاف الرقم" : "يمكن إضافة الرقم الضريبي لاحقًا" },
+              ]}
+            />
+            {errors.vat_registered ? <p id="register-vat_registered-error" className="mt-1.5 text-[13px] text-[#B42318]">{errors.vat_registered}</p> : null}
           </div>
-          {field("cr_number", "السجل التجاري", { ltr: true, placeholder: isSaudi ? "10 أرقام" : "رقم السجل في دولتك" })}
-          {field("vat_number", isSaudi ? "الرقم الضريبي (لازم لإصدار فواتير المبيعات)" : "الرقم الضريبي في دولتك", { ltr: true, placeholder: isSaudi ? "3XXXXXXXXXXXXX3" : "" })}
-          {field("phone", "رقم الجوال", { ltr: true, required: true, type: "tel", placeholder: isSaudi ? "05XXXXXXXX" : "" })}
-          {field("email", "بريد المنشأة (اختياري)", { ltr: true, type: "email" })}
-          {field("contact_name", "اسم المسؤول")}
-          {field("city", "المدينة")}
-          {field("address_ar", isSaudi ? "العنوان الوطني بالعربية" : "العنوان بالعربية")}
-          {field("address_en", "العنوان بالإنجليزية", { ltr: true })}
+          {form.vat_registered === "yes" ? (
+            <Field id="register-vat_number" label="الرقم الضريبي" required error={errors.vat_number} hint={isSaudi ? "15 رقمًا يبدأ وينتهي بالرقم 3، ولازم لإصدار فواتير المبيعات" : "كما في شهادة التسجيل الضريبي"} wide>
+              <TextInput {...input("vat_number")} icon={Hash} required hint="vat" dir="ltr" inputMode={isSaudi ? "numeric" : "text"} placeholder={isSaudi ? "3XXXXXXXXXXXXX3" : ""} />
+            </Field>
+          ) : form.vat_registered === "no" && isSaudi ? (
+            <p className="text-[13px] leading-6 sm:col-span-2" style={{ color: AUTH_COLORS.muted }}>
+              لا تصدر فواتير المبيعات وإشعاراتها حتى تضيف إدارة المنصة الرقم الضريبي لمنشأتك بعد تسجيلك في الهيئة.
+            </p>
+          ) : null}
+        </FormSection>
+
+        <FormSection step={4} title="التواصل">
+          <Field id="register-phone" label="رقم الجوال" required error={errors.phone}>
+            <TextInput {...input("phone")} icon={Phone} required type="tel" dir="ltr" inputMode="tel" autoComplete="tel" placeholder={isSaudi ? "05XXXXXXXX" : `${dial} ...`} />
+          </Field>
+          <Field id="register-email" label="بريد المنشأة" error={errors.email} hint="اختياري؛ إن تُرك فارغًا يُستخدم بريد حسابك">
+            <TextInput {...input("email")} icon={Mail} type="email" dir="ltr" hint="optional" autoComplete="email" />
+          </Field>
+          <Field id="register-contact_name" label="اسم المسؤول" wide>
+            <TextInput {...input("contact_name")} icon={UserRound} autoComplete="name" />
+          </Field>
+        </FormSection>
+
+        <div className="border-t pt-7" style={{ borderColor: AUTH_COLORS.line }}>
+          <button type="submit" disabled={saving} className={primaryButtonClass}>
+            {saving ? "جاري الإرسال..." : "أرسل طلب التسجيل"}
+          </button>
         </div>
-        {isSaudi ? (
-          <p className="text-[13px] leading-6" style={{ color: AUTH_COLORS.muted }}>
-            الاسم والرقم الضريبي والسجل التجاري تظهر على الفواتير الضريبية، ولا تُعدَّل بعد الموافقة إلا عن طريق إدارة المنصة.
-          </p>
-        ) : (
-          <div className={authNoteClass} style={{ background: AUTH_COLORS.mint, borderColor: "#BFDCCD", color: AUTH_COLORS.ink }}>
-            منشأتك خارج السعودية: لن تظهر لك الأنظمة السعودية (الفوترة الإلكترونية للهيئة، والتأمينات الاجتماعية، والإقرار الضريبي والزكاة).
-            الفوترة (فواتير المبيعات والمشتريات وإشعاراتها) والضريبة بالنسبة التي تحددها حسب دولتك تُفعَّل في تحديث قادم.
-          </div>
-        )}
-        <button type="submit" disabled={saving} className={authButtonClass} style={authButtonStyle}>
-          {saving ? "جاري الإرسال..." : "أرسل طلب التسجيل"}
-        </button>
       </form>
     </AuthShell>
   );

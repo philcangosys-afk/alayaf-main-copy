@@ -3,7 +3,8 @@ import { Navigate, useNavigate } from "react-router-dom";
 import { Clock3, ShieldAlert, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { companyStatusMessage, loadCompanyState, useCompany } from "@/lib/companyContext";
-import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authLinkClass } from "@/components/AuthShell";
+import AuthShell, { AUTH_COLORS } from "@/components/AuthShell";
+import { StatusIcon, linkClass, primaryButtonClass } from "@/components/AuthForm";
 import { buildBusinessSession } from "@/lib/businessSession";
 
 /** حالة المنشأة عندما لا تكون فعالة: بانتظار الموافقة، موقوفة، مرفوضة، عضو معطّل، أو حساب إدارة المنصة */
@@ -16,7 +17,7 @@ export default function CompanyStatus() {
   if (company.status === "none" && !company.isPlatformAdmin) return <Navigate to="/register-company" replace />;
 
   const message = companyStatusMessage(company);
-  const Icon = company.status === "pending" || company.status === "error" ? Clock3 : ShieldAlert;
+  const waiting = company.status === "pending" || company.status === "error";
 
   const recheck = async () => {
     setChecking(true);
@@ -47,23 +48,20 @@ export default function CompanyStatus() {
 
   return (
     <AuthShell
+      icon={<StatusIcon icon={waiting ? Clock3 : ShieldAlert} tone={waiting ? "warning" : "danger"} />}
       title={message.title}
       subtitle={company.company?.name_ar || "حالة المنشأة"}
-      footer={<button type="button" onClick={() => void logout()} className={authLinkClass}>تسجيل الخروج</button>}
+      footer={<button type="button" onClick={() => void logout()} className={linkClass}>تسجيل الخروج</button>}
     >
-      <div className="flex items-start gap-4">
-        <Icon className={`mt-1 h-9 w-9 shrink-0 ${company.status === "pending" ? "text-[#B54708]" : "text-[#B42318]"}`} aria-hidden="true" />
-        <div className="space-y-2">
-          <p className="text-[15px] leading-8" style={{ color: AUTH_COLORS.text }}>{message.body}</p>
-          {company.company?.code ? (
-            <p className="text-[13px]" style={{ color: AUTH_COLORS.muted }}>
-              رقم المنشأة: <span className="font-semibold" dir="ltr">{company.company.code}</span>
-            </p>
-          ) : null}
+      <p className="text-[15px] leading-8" style={{ color: AUTH_COLORS.text }}>{message.body}</p>
+      {company.company?.code ? (
+        <div className="flex items-center justify-between rounded-xl border px-4 py-3 text-[14px]" style={{ borderColor: AUTH_COLORS.line, background: "#F6F9F7" }}>
+          <span style={{ color: AUTH_COLORS.muted }}>رقم المنشأة</span>
+          <span className="font-bold" dir="ltr" style={{ color: AUTH_COLORS.ink }}>{company.company.code}</span>
         </div>
-      </div>
-      {company.status === "pending" || company.status === "error" ? (
-        <button type="button" onClick={() => void recheck()} disabled={checking} className={`${authButtonClass} inline-flex items-center justify-center gap-2`} style={authButtonStyle}>
+      ) : null}
+      {waiting ? (
+        <button type="button" onClick={() => void recheck()} disabled={checking} className={primaryButtonClass}>
           <RefreshCw className={`h-4 w-4 ${checking ? "animate-spin" : ""}`} aria-hidden="true" />
           {checking ? "جاري التحقق..." : "تحقق من حالة الطلب"}
         </button>

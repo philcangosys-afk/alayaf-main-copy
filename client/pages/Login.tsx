@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useNavigate, Link, useLocation } from "react-router-dom";
-import { Eye, EyeOff, Lock, Mail } from "lucide-react";
+import { Lock, Mail } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { toast } from "sonner";
-import AuthShell, { AUTH_COLORS, authButtonClass, authButtonStyle, authInputClass, authLabelClass, authLinkClass, authNoteClass } from "@/components/AuthShell";
+import AuthShell, { AUTH_COLORS } from "@/components/AuthShell";
+import { Field, Notice, PasswordInput, TextInput, linkClass, primaryButtonClass, secondaryButtonClass } from "@/components/AuthForm";
 import { companyStatusMessage, loadCompanyState } from "@/lib/companyContext";
 import { buildBusinessSession } from "@/lib/businessSession";
 
@@ -15,7 +16,6 @@ export default function Login() {
   const passwordReset = Boolean(routeState?.passwordReset);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sendingReset, setSendingReset] = useState(false);
 
@@ -105,88 +105,64 @@ export default function Login() {
   return (
     <AuthShell
       title="تسجيل الدخول"
-      subtitle="ادخل إلى حساب منشأتك"
+      subtitle="مرحبًا بعودتك. ادخل إلى حساب منشأتك."
       footer={
-        <>
-          <p>
-            منشأتك غير مسجّلة؟{" "}
-            <Link to="/signup" className={authLinkClass}>سجّل منشأتك الآن</Link>
-          </p>
-          <p>
-            موظف في منشأة مسجّلة؟{" "}
-            <Link to="/employee/login" className={authLinkClass}>بوابة الموظفين</Link>
-          </p>
-        </>
+        <p>
+          موظف في منشأة مسجّلة؟{" "}
+          <Link to="/employee/login" className={linkClass}>ادخل من بوابة الموظفين</Link>
+        </p>
       }
     >
-      {activated ? (
-        <div className={authNoteClass} style={{ background: AUTH_COLORS.mint, borderColor: "#BFDCCD", color: AUTH_COLORS.ink }}>
-          تم تفعيل منشأتك. سجّل الدخول للبدء.
-        </div>
-      ) : null}
-      {passwordReset ? (
-        <div className={authNoteClass} style={{ background: AUTH_COLORS.mint, borderColor: "#BFDCCD", color: AUTH_COLORS.ink }}>
-          تم تغيير كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.
-        </div>
-      ) : null}
+      {activated ? <Notice tone="success">تم تفعيل منشأتك. سجّل الدخول للبدء.</Notice> : null}
+      {passwordReset ? <Notice tone="success">تم تغيير كلمة المرور. سجّل الدخول بكلمة المرور الجديدة.</Notice> : null}
       <form onSubmit={handleLogin} className="space-y-5" noValidate>
-        <div>
-          <label htmlFor="login-email" className={authLabelClass}>البريد الإلكتروني</label>
-          <div className="relative">
-            <Mail className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7C918A]" aria-hidden="true" />
-            <input
-              id="login-email"
-              type="email"
-              dir="ltr"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@company.com"
-              className={`${authInputClass} pr-10`}
-              disabled={loading}
-              autoComplete="email"
-            />
-          </div>
-        </div>
-
-        <div>
-          <div className="mb-1.5 flex items-baseline justify-between">
-            <label htmlFor="login-password" className="text-[14px] font-medium text-[#24443A]">كلمة المرور</label>
+        <Field id="login-email" label="البريد الإلكتروني">
+          <TextInput
+            id="login-email"
+            icon={Mail}
+            type="email"
+            dir="ltr"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="name@company.com"
+            disabled={loading}
+            autoComplete="email"
+          />
+        </Field>
+        <Field
+          id="login-password"
+          label="كلمة المرور"
+          aside={
             <button
               type="button"
               onClick={() => void handleForgotPassword()}
               disabled={loading || sendingReset}
-              className={`text-[13px] ${authLinkClass} disabled:opacity-50`}
+              className={`text-[13px] ${linkClass} disabled:opacity-50`}
             >
               {sendingReset ? "جاري الإرسال..." : "نسيت كلمة المرور؟"}
             </button>
-          </div>
-          <div className="relative">
-            <Lock className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[#7C918A]" aria-hidden="true" />
-            <input
-              id="login-password"
-              type={showPassword ? "text" : "password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className={`${authInputClass} pr-10 pl-11`}
-              disabled={loading}
-              autoComplete="current-password"
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              aria-label={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
-              className="absolute left-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-[#7C918A] hover:text-[#24443A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#14775A]/40"
-            >
-              {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            </button>
-          </div>
-        </div>
-
-        <button type="submit" disabled={loading} className={authButtonClass} style={authButtonStyle}>
+          }
+        >
+          <PasswordInput
+            id="login-password"
+            icon={Lock}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            disabled={loading}
+            autoComplete="current-password"
+          />
+        </Field>
+        <button type="submit" disabled={loading} className={primaryButtonClass}>
           {loading ? "جاري الدخول..." : "دخول"}
         </button>
       </form>
+      <div className="flex items-center gap-3 text-[13px]" style={{ color: AUTH_COLORS.muted }}>
+        <span className="h-px flex-1" style={{ background: AUTH_COLORS.line }} />
+        منشأتك غير مسجّلة؟
+        <span className="h-px flex-1" style={{ background: AUTH_COLORS.line }} />
+      </div>
+      <Link to="/signup" className={secondaryButtonClass}>سجّل منشأتك الآن</Link>
     </AuthShell>
   );
 }

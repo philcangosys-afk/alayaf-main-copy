@@ -7,12 +7,13 @@ import { useI18n } from "@/i18n";
 import { supabase } from "@/lib/supabaseClient";
 import { useCompany } from "@/lib/companyContext";
 import { isSaudiCompany } from "@/lib/companyProfile";
-import { countryName } from "@/lib/countries";
+import { SAUDI_REGIONS, countryName } from "@/lib/countries";
 import DocumentTemplateWorkspace from "@/components/document-templates/DocumentTemplateWorkspace";
 
 type EditableProfile = {
   phone: string;
   email: string;
+  region: string;
   city: string;
   address_ar: string;
   address_en: string;
@@ -28,6 +29,7 @@ const PROFILE_ERRORS: Record<string, string> = {
   COMPANY_ADMIN_REQUIRED: "تعديل بيانات المنشأة لمدير النظام فقط",
   COMPANY_LOGO_URL_INVALID: "رابط الشعار يبدأ بـ https:// (أو مسار داخل الموقع يبدأ بـ /)",
   COMPANY_IBAN_INVALID: "الآيبان السعودي يبدأ بـ SA ويتبعه 22 رقمًا",
+  COMPANY_REGION_INVALID: "المنطقة 100 حرف على الأكثر",
 };
 
 /**
@@ -40,7 +42,7 @@ export default function Settings() {
   const company = useCompany();
   const record = company.company;
   const [activeSection, setActiveSection] = useState<"company" | "templates">("company");
-  const [draft, setDraft] = useState<EditableProfile>({ phone: "", email: "", city: "", address_ar: "", address_en: "", bank_name: "", iban: "", logo_url: "" });
+  const [draft, setDraft] = useState<EditableProfile>({ phone: "", email: "", region: "", city: "", address_ar: "", address_en: "", bank_name: "", iban: "", logo_url: "" });
   const [saving, setSaving] = useState(false);
 
   const recordKey = JSON.stringify(record ?? null);
@@ -48,6 +50,7 @@ export default function Settings() {
     setDraft({
       phone: record?.phone ?? "",
       email: record?.email ?? "",
+      region: record?.region ?? "",
       city: record?.city ?? "",
       address_ar: record?.address_ar ?? "",
       address_en: record?.address_en ?? "",
@@ -104,6 +107,7 @@ export default function Settings() {
         onChange={(e) => setField(key, e.target.value)}
         dir={ltr ? "ltr" : undefined}
         disabled={saving}
+        maxLength={key === "region" ? 100 : undefined}
         className={cn("w-full rounded-xl border border-border/50 bg-white px-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/20", ltr && "font-mono")}
       />
     </div>
@@ -164,8 +168,24 @@ export default function Settings() {
                 {companyFields.map(renderField)}
                 {editField("phone", "الجوال", true)}
                 {editField("email", "بريد المنشأة", true)}
+                {isSaudiCompany() ? (
+                  <div key="region">
+                    <p className="mb-1 text-xs font-semibold text-muted-foreground">{t("المنطقة")}</p>
+                    <select
+                      value={draft.region}
+                      onChange={(e) => setField("region", e.target.value)}
+                      disabled={saving}
+                      className="w-full rounded-xl border border-border/50 bg-white px-4 py-2.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                    >
+                      <option value="">{t("اختر المنطقة")}</option>
+                      {/* قيمة محفوظة من قبل ليست في القائمة تبقى ظاهرة */}
+                      {draft.region && !SAUDI_REGIONS.includes(draft.region) ? <option value={draft.region}>{draft.region}</option> : null}
+                      {SAUDI_REGIONS.map((region) => <option key={region} value={region}>{region}</option>)}
+                    </select>
+                  </div>
+                ) : editField("region", "المنطقة / الولاية")}
                 {editField("city", "المدينة")}
-                {editField("address_ar", "العنوان الوطني")}
+                {editField("address_ar", isSaudiCompany() ? "العنوان الوطني" : "العنوان الداخلي")}
                 {editField("address_en", "العنوان بالإنجليزية", true)}
                 {editField("logo_url", "رابط الشعار", true)}
               </div>
