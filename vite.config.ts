@@ -4,7 +4,13 @@ import path from "path";
 import { createServer } from "./server";
 
 // https://vitejs.dev/config/
+// S16: إصدار البناء في سجل أخطاء النظام (Netlify يضبط COMMIT_REF عند البناء)
+const APP_VERSION = String(process.env.COMMIT_REF ?? process.env.VITE_APP_VERSION ?? "dev").slice(0, 12);
+
 export default defineConfig(({ mode }) => ({
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   server: {
     host: "::",
     port: 8080,

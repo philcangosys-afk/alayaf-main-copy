@@ -5,7 +5,8 @@ import { createRoot } from "react-dom/client";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import type { ReactNode } from "react";
 import { Boxes } from "lucide-react";
 import Dashboard from "./pages/Dashboard";
 import Sales from "./pages/Sales";
@@ -147,6 +148,21 @@ import FleetDocuments from "./pages/fleet/FleetDocuments";
 import FleetTrips from "./pages/fleet/FleetTrips";
 import FleetFuel from "./pages/fleet/FleetFuel";
 import { I18nProvider } from "./i18n";
+import AppErrorBoundary from "./components/AppErrorBoundary";
+import { installGlobalErrorHandlers } from "./lib/errorReporter";
+
+// S16: الأخطاء غير الملتقطة والوعود المرفوضة تُسجَّل في سجل أخطاء النظام
+installGlobalErrorHandlers();
+
+/** S16: خطأ في صفحة يعرض شاشة الخطأ برقمه، والانتقال لصفحة أخرى يعيد العرض */
+function RouteErrorBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  return (
+    <AppErrorBoundary area="page" resetKey={location.pathname}>
+      {children}
+    </AppErrorBoundary>
+  );
+}
 
 const queryClient = new QueryClient();
 
@@ -158,6 +174,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <CompanyProvider>
+        <RouteErrorBoundary>
         <Routes>
           {/* Public Routes */}
           <Route path="/login" element={<Login />} />
@@ -352,6 +369,7 @@ const App = () => (
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+        </RouteErrorBoundary>
         <SubscriptionErrorDialog />
         </CompanyProvider>
       </BrowserRouter>
@@ -366,5 +384,9 @@ if (container) {
     (container as { __root?: ReturnType<typeof createRoot> }).__root ??
     createRoot(container);
   (container as { __root?: ReturnType<typeof createRoot> }).__root = root;
-  root.render(<App />);
+  root.render(
+    <AppErrorBoundary area="root">
+      <App />
+    </AppErrorBoundary>,
+  );
 }
