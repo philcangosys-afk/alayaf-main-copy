@@ -28,6 +28,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { companyNumberLike, nextCompanyNumber, previewNextNumber } from "@/lib/companyNumbers";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
+import { ItemLinkButton, ItemPickerDialog, StockHint } from "@/components/ItemPicker";
+import { requestedQuantity, useItemCatalog, type CatalogItem } from "@/lib/itemCatalog";
 import { dbErrorText } from "@/lib/dbErrors";
 
 type QuotationItem = {
@@ -38,6 +40,8 @@ type QuotationItem = {
   unitPrice: number;
   discount: number;
   taxPercent: number;
+  // S17: الصنف أو الخدمة المختارة للبند (اختياري)، ينتقل لأمر البيع ثم الفاتورة
+  productId?: string;
 };
 
 // بيانات العميل اللازمة لتعبئة الرقم الضريبي والعنوان في العرض
@@ -162,6 +166,7 @@ function mapRow(row: Record<string, unknown>): QuotationRow {
           unitPrice: toNum(it.unitPrice),
           discount: toNum(it.discount),
           taxPercent: toNum(it.taxPercent),
+          ...(it.productId ? { productId: String(it.productId) } : {}),
         }))
       : [createDefaultItem(1)];
 
@@ -609,6 +614,29 @@ function QuotationEditor({
   );
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [saving, setSaving] = useState(false);
+  // S17: الأصناف والخدمات بأسعار البيع والكميات المتوفرة
+  const catalog = useItemCatalog();
+  const catalogById = useMemo(
+    () => new Map(catalog.items.map((item) => [item.id, item] as const)),
+    [catalog.items],
+  );
+  const [pickerLineId, setPickerLineId] = useState<number | null>(null);
+  const pickItem = (lineId: number, product: CatalogItem | null) => {
+    setPickerLineId(null);
+    setItems((prev) =>
+      prev.map((item) => {
+        if (item.id !== lineId) return item;
+        if (!product) return { ...item, productId: undefined };
+        return {
+          ...item,
+          productId: product.id,
+          itemLabel: product.nameAr,
+          description: product.description || item.description,
+          unitPrice: product.salePrice > 0 ? product.salePrice : item.unitPrice,
+        };
+      }),
+    );
+  };
 
   useEffect(() => {
     const loadDefaults = async () => {
@@ -928,13 +956,24 @@ function QuotationEditor({
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       </td>
-                      <td className="border px-2 py-2">
+                      <td className="border px-2 py-2 min-w-[180px] align-top">
+                        {(catalog.items.length > 0 || item.productId) && (
+                          <ItemLinkButton
+                            item={item.productId ? catalogById.get(item.productId) : undefined}
+                            linkedId={item.productId}
+                            onOpen={() => setPickerLineId(item.id)}
+                          />
+                        )}
                         <input
                           value={item.itemLabel}
                           onChange={(e) =>
                             updateItem(item.id, { itemLabel: e.target.value })
                           }
                           className={`${INPUT_CLASS} h-9`}
+                        />
+                        <StockHint
+                          item={item.productId ? catalogById.get(item.productId) : undefined}
+                          requested={item.productId ? requestedQuantity(items, item.productId) : 0}
                         />
                       </td>
                       <td className="border px-2 py-2 min-w-[220px]">
@@ -1005,6 +1044,16 @@ function QuotationEditor({
                 })}
               </tbody>
             </table>
+            {pickerLineId !== null && (
+              <ItemPickerDialog
+                items={catalog.items}
+                warehouses={catalog.warehouses}
+                priceKind="sale"
+                selectedId={items.find((line) => line.id === pickerLineId)?.productId}
+                onSelect={(product) => pickItem(pickerLineId, product)}
+                onClose={() => setPickerLineId(null)}
+              />
+            )}
           </div>
 
           <div className="flex justify-between items-center">

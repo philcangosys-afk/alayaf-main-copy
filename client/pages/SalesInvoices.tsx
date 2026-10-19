@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Layout from "@/components/Layout";
 import { salesFeatures } from "./Sales";
@@ -40,6 +40,17 @@ import { companyNumberLike, previewNextNumber } from "@/lib/companyNumbers";
 import QRCode from "qrcode";
 import ZatcaQrCode from "@/components/ZatcaQrCode";
 import PartyRegistrationDialog from "@/components/PartyRegistrationDialog";
+import { ItemLinkButton, ItemPickerDialog, StockHint } from "@/components/ItemPicker";
+import {
+  deliveredQuantity,
+  requestedQuantity,
+  roundQuantity,
+  stockIn,
+  useItemCatalog,
+  useUninvoicedDeliveries,
+  type CatalogItem,
+  type PriorDelivery,
+} from "@/lib/itemCatalog";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE, isSaudiCompany, zatcaDeviceSerialKey } from "@/lib/companyProfile";
 import { checkPerm } from "@/lib/authSession";
@@ -155,6 +166,16 @@ const salesInvoiceErrorMessages: Array<[string, string]> = [
   ["ZATCA_COMPANY_VAT_REQUIRED", "الرقم الضريبي للمنشأة غير مسجّل؛ لا تصدر فواتير المبيعات حتى تضيفه إدارة المنصة (حدّث الصفحة بعد إضافته). لم تُحفظ الفاتورة"],
   ["ZATCA_RESEND_PERMISSION_REQUIRED", "إعادة الإرسال تتطلب صلاحية إدارة فواتير المبيعات"],
   ["ACCOUNTING_FISCAL_PERIOD_CLOSED", "الفترة المحاسبية لتاريخ اليوم مقفلة"],
+  // S17: المنتجات المخزنية في الفاتورة تُصرف معها
+  ["SALES_INVOICE_WAREHOUSE_REQUIRED", "في الفاتورة منتجات مخزنية؛ اختر المستودع الذي تُصرف منه"],
+  ["SALES_INVOICE_WAREHOUSE_INVALID", "المستودع المختار غير موجود أو موقوف؛ اختر مستودعًا نشطًا"],
+  ["SALES_INVOICE_PRODUCT_INVALID", "أحد الأصناف المختارة غير موجود أو موقوف؛ اختره من جديد أو اجعله بندًا حرًا"],
+  ["SALES_INVOICE_STOCK_CUSTOMER_REQUIRED", "بيع المنتجات المخزنية يتطلب عميلًا من قائمة العملاء؛ اختر العميل من القائمة"],
+  ["INVENTORY_ISSUE_INSUFFICIENT_STOCK", "الكمية المتوفرة في المستودع لا تكفي لأحد المنتجات؛ لم تُحفظ الفاتورة. خفّض الكمية أو اختر مستودعًا آخر"],
+  ["INVENTORY_ISSUE_PRODUCT_INVALID", "أحد المنتجات المخزنية موقوف أو غير صالح للصرف"],
+  ["SALES_INVOICE_DELIVERY_INVALID", "أحد إشعارات التسليم المختارة رُبط بفاتورة أخرى أو تغيّر؛ أعد اختيار العميل واختر الإشعارات من جديد"],
+  ["SALES_INVOICE_DELIVERY_NOT_COVERED", "الفاتورة يجب أن تشمل كل أصناف إشعارات التسليم المختارة بكمية لا تقل عن المسلَّم"],
+  ["SALES_INVOICE_STOCK_QUANTITY_INVALID", "كمية المنتج المخزني في الفاتورة 0.0001 فأكثر"],
   ["ACCOUNTING_FISCAL_PERIOD_REQUIRED", "لا توجد فترة محاسبية لتاريخ اليوم"],
 ];
 // نتيجة zatca_resend_state: متى تجوز إعادة الإرسال
@@ -2548,11 +2569,14 @@ type SalesOrderInvoiceSource = {
   id: string;
   customerId: string;
   customer: string;
+  // S17: مستودع الأمر وأصناف بنوده (اختياريان)
+  warehouseId: string;
   items: Array<{
     description: string;
     quantity: number;
     unitPrice: number;
     discount: number;
+    productId?: string;
   }>;
 };
 
@@ -2570,12 +2594,14 @@ const readSalesOrderInvoiceSource = (
           quantity: Number(item.quantity) || 0,
           unitPrice: Number(item.unitPrice) || 0,
           discount: Number(item.discount) || 0,
+          productId: item.productId ? String(item.productId) : undefined,
         }))
     : [];
   return {
     id: String(source.id),
     customerId: String(source.customerId ?? ""),
     customer: String(source.customer ?? ""),
+    warehouseId: String(source.warehouseId ?? ""),
     items,
   };
 };
@@ -2594,7 +2620,19 @@ function InvoiceForm({
   // (S14) خارج السعودية: الفوترة متوقفة حتى الضريبة حسب الدولة، ولا يُطلب الرقم الضريبي السعودي
   const companyVatMissing =
     isSaudiCompany() && COMPANY_PROFILE.zatcaPhase === "phase1" && !COMPANY_PROFILE.vatNumber.trim();
-  const [items, setItems] = useState([
+  const [items, setItems] = useState<
+    Array<{
+      id: number;
+      description: string;
+      accountCode: string;
+      quantity: number;
+      unitPrice: number;
+      discount: number;
+      taxPercent: number;
+      // S17: الصنف أو الخدمة المختارة للبند (اختياري؛ البند الحر بلا صنف)
+      productId?: string;
+    }>
+  >([
     {
       id: 1,
       description: "",
@@ -2606,11 +2644,37 @@ function InvoiceForm({
     },
   ]);
   const [revenueAccounts, setRevenueAccounts] = useState<RevenueAccount[]>([]);
+  // S17: الأصناف والخدمات، ومستودع صرف المنتجات المخزنية
+  const catalog = useItemCatalog();
+  const catalogById = useMemo(
+    () => new Map(catalog.items.map((item) => [item.id, item] as const)),
+    [catalog.items],
+  );
+  const [warehouseId, setWarehouseId] = useState("");
+  const [pickerLineId, setPickerLineId] = useState<number | null>(null);
+  // صنف غير موجود في القائمة (موقوف بعد اختياره) يُعامل منتجًا مخزنيًا حتى ترفضه القاعدة برسالة واضحة
+  const stockProductIds = Array.from(
+    new Set(
+      items
+        .filter((item) => item.productId && catalogById.get(item.productId)?.itemType !== "service")
+        .map((item) => item.productId as string),
+    ),
+  );
+  const hasStockLines = stockProductIds.length > 0;
   const [customerOptions, setCustomerOptions] = useState<CustomerOption[]>([]);
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [customerId, setCustomerId] = useState("");
+  // S17: إشعارات تسليم سابقة للعميل لم تُفوتر: المختار منها تغطيه الفاتورة ولا تُصرف كميته مرة ثانية
+  const priorDeliveries = useUninvoicedDeliveries(customerId);
+  const [linkedDeliveryIds, setLinkedDeliveryIds] = useState<string[]>([]);
+  const linkedCustomerRef = useRef("");
+  const linkedDeliveries = priorDeliveries.deliveries.filter((delivery) => linkedDeliveryIds.includes(delivery.id));
+  const deliveredOf = (productId: string) => deliveredQuantity(linkedDeliveries, productId);
+  // يُصرف مع الفاتورة ما زاد عن المسلَّم سابقًا؛ المستودع مطلوب له فقط
+  const remainingOf = (productId: string) => roundQuantity(requestedQuantity(items, productId) - deliveredOf(productId));
+  const needsWarehouse = stockProductIds.some((productId) => remainingOf(productId) > 0);
   const [customer, setCustomer] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
   const [notes, setNotes] = useState("");
@@ -2800,9 +2864,12 @@ function InvoiceForm({
             unitPrice: line.unitPrice,
             discount: line.discount,
             taxPercent: SAUDI_STANDARD_VAT_RATE,
+            productId: line.productId,
           })),
         );
       }
+      if (source.warehouseId) setWarehouseId(source.warehouseId);
+      setOrderAccountsPending(source.items.some((line) => Boolean(line.productId)));
       setPendingOrderCustomer({ id: source.customerId, name: source.customer });
     };
     void loadSalesOrder();
@@ -2880,6 +2947,117 @@ function InvoiceForm({
     );
   };
 
+  // S17: اختيار صنف للبند يعبّئ الوصف وسعر البيع وحساب الإيراد؛ وتبقى كلها قابلة للتعديل
+  const pickItem = (lineId: number, product: CatalogItem | null) => {
+    setPickerLineId(null);
+    if (!product) {
+      updateItem(lineId, { productId: undefined });
+      return;
+    }
+    const revenueKnown =
+      !revenueAccounts.length || revenueAccounts.some((account) => account.code === product.revenueAccountCode);
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === lineId
+          ? {
+              ...item,
+              productId: product.id,
+              description: product.nameAr,
+              unitPrice: product.salePrice > 0 ? product.salePrice : item.unitPrice,
+              accountCode: product.revenueAccountCode && revenueKnown ? product.revenueAccountCode : item.accountCode,
+            }
+          : item,
+      ),
+    );
+  };
+
+  // بنود أمر البيع المحوّل: حساب إيراد الصنف (كما عند اختياره في الفاتورة) بعد تحميل القائمة، مرة واحدة
+  const [orderAccountsPending, setOrderAccountsPending] = useState(false);
+  useEffect(() => {
+    if (!orderAccountsPending || !catalog.loaded) return;
+    setOrderAccountsPending(false);
+    setItems((prev) =>
+      prev.map((item) => {
+        const product = item.productId ? catalogById.get(item.productId) : undefined;
+        if (!product?.revenueAccountCode) return item;
+        const known = !revenueAccounts.length || revenueAccounts.some((account) => account.code === product.revenueAccountCode);
+        return known ? { ...item, accountCode: product.revenueAccountCode } : item;
+      }),
+    );
+  }, [orderAccountsPending, catalog.loaded, catalogById, revenueAccounts]);
+
+  // العميل تغيّر، أو رُبط إشعار مختار بفاتورة أخرى: يُلغى اختياره وينبَّه المستخدم (كميته في البنود تُصرف الآن)
+  useEffect(() => {
+    const kept = linkedDeliveryIds.filter((id) => priorDeliveries.deliveries.some((delivery) => delivery.id === id));
+    if (kept.length === linkedDeliveryIds.length) return;
+    setLinkedDeliveryIds(kept);
+    // تغيير العميل يلغي الاختيار بلا تنبيه؛ التنبيه لإشعار اختفى لعميل الاختيار نفسه
+    if (customerId && customerId === linkedCustomerRef.current) {
+      toast({
+        title: t("أُلغي اختيار إشعار تسليم"),
+        description: t("لم يعد الإشعار متاحًا لهذا العميل (رُبط بفاتورة أخرى). راجع كميات البنود: ما زاد عن الإشعارات المختارة يُصرف من المستودع."),
+        variant: "destructive",
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [priorDeliveries.deliveries]);
+
+  // اختيار إشعار سابق: كل صنف فيه يُضاف للبنود، أو تُرفع كميته إلى المسلَّم على الأقل
+  const toggleDelivery = (delivery: PriorDelivery, checked: boolean) => {
+    linkedCustomerRef.current = customerId;
+    if (!checked) {
+      setLinkedDeliveryIds((ids) => ids.filter((id) => id !== delivery.id));
+      return;
+    }
+    const selected = [...linkedDeliveries.filter((row) => row.id !== delivery.id), delivery];
+    setLinkedDeliveryIds(selected.map((row) => row.id));
+    setItems((prev) => {
+      const blank = (item: (typeof prev)[number]) =>
+        !item.productId && !item.description.trim() && !(Number(item.unitPrice) > 0);
+      let next = prev.filter((item) => !blank(item));
+      const productIds = Array.from(new Set(delivery.lines.map((line) => line.productId)));
+      for (const productId of productIds) {
+        const delivered = deliveredQuantity(selected, productId);
+        const current = requestedQuantity(next, productId);
+        if (current >= delivered) continue;
+        const deficit = Math.round((delivered - current) * 10000) / 10000;
+        const existing = [...next].reverse().find((item) => item.productId === productId);
+        if (existing) {
+          next = next.map((item) =>
+            item.id === existing.id ? { ...item, quantity: Math.round((Number(item.quantity) + deficit) * 10000) / 10000 } : item,
+          );
+          continue;
+        }
+        const product = catalogById.get(productId);
+        const line = delivery.lines.find((row) => row.productId === productId);
+        const revenueKnown =
+          Boolean(product?.revenueAccountCode) &&
+          (!revenueAccounts.length || revenueAccounts.some((account) => account.code === product?.revenueAccountCode));
+        next = [
+          ...next,
+          {
+            id: nextLineId(next),
+            description: product?.nameAr || line?.nameAr || "",
+            accountCode: revenueKnown && product ? product.revenueAccountCode : (prev[0]?.accountCode ?? "411"),
+            quantity: deficit,
+            unitPrice: product && product.salePrice > 0 ? product.salePrice : 0,
+            discount: 0,
+            taxPercent: SAUDI_STANDARD_VAT_RATE,
+            productId,
+          },
+        ];
+      }
+      return next.length > 0 ? next : prev;
+    });
+  };
+
+  // مستودع واحد نشط: يُختار تلقائيًا عند أول منتج مخزني
+  useEffect(() => {
+    if (needsWarehouse && !warehouseId && catalog.warehouses.length === 1) {
+      setWarehouseId(catalog.warehouses[0].id);
+    }
+  }, [needsWarehouse, warehouseId, catalog.warehouses]);
+
   const totals = items.reduce(
     (acc, item) => {
       const lineSubtotal = item.quantity * item.unitPrice - item.discount;
@@ -2928,6 +3106,47 @@ function InvoiceForm({
         variant: "destructive",
       });
       return;
+    }
+    // S17: المنتجات المخزنية: العميل من القائمة، والإشعارات السابقة مغطاة، والباقي من مستودع بكمية متوفرة
+    if ((hasStockLines || linkedDeliveryIds.length > 0) && !customerId) {
+      toast({
+        title: t("العميل مطلوب"),
+        description: t(salesInvoiceErrorText("SALES_INVOICE_STOCK_CUSTOMER_REQUIRED")),
+        variant: "destructive",
+      });
+      return;
+    }
+    const uncoveredLine = linkedDeliveries
+      .flatMap((delivery) => delivery.lines)
+      .find((line) => requestedQuantity(items, line.productId) < deliveredOf(line.productId));
+    if (uncoveredLine) {
+      toast({
+        title: t("الفاتورة لا تغطي إشعار التسليم"),
+        description: `${uncoveredLine.nameAr} (${uncoveredLine.sku}) — ${t("المسلَّم")}: ${deliveredOf(uncoveredLine.productId)} ${uncoveredLine.unit}، ${t("في الفاتورة")}: ${requestedQuantity(items, uncoveredLine.productId)}`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (needsWarehouse) {
+      if (!warehouseId) {
+        toast({
+          title: t("المستودع مطلوب"),
+          description: t(salesInvoiceErrorText("SALES_INVOICE_WAREHOUSE_REQUIRED")),
+          variant: "destructive",
+        });
+        return;
+      }
+      const shortProduct = stockProductIds
+        .map((id) => catalogById.get(id))
+        .find((product) => product && remainingOf(product.id) > stockIn(product, warehouseId));
+      if (shortProduct) {
+        toast({
+          title: t("الكمية غير متوفرة"),
+          description: `${shortProduct.nameAr} (${shortProduct.sku}) — ${t("المتوفر")}: ${stockIn(shortProduct, warehouseId)} ${shortProduct.unit}، ${t("المطلوب")}: ${remainingOf(shortProduct.id)}`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     // نفس شروط دالة ZATCA قبل الإرسال، حتى لا تُرحَّل فاتورة سترفضها الدالة لاحقًا
     const invalidLine = items.find(
@@ -3089,6 +3308,9 @@ function InvoiceForm({
         remaining: `ريال ${totalValue.toFixed(2)}`,
         status: "مفتوحة",
         client_request_id: requestIdRef.current,
+        // S17: يُرسلان فقط عند الحاجة (القاعدة قبل S17 لا تعرف العمودين)
+        ...(needsWarehouse ? { warehouse_id: warehouseId } : {}),
+        ...(linkedDeliveryIds.length > 0 ? { linked_delivery_ids: linkedDeliveryIds } : {}),
       };
 
       // الرقم والتاريخ تحددهما القاعدة؛ id المرسل للتوافق فقط
@@ -3135,6 +3357,11 @@ function InvoiceForm({
 
       if (error) {
         printWindow?.close();
+        // الكميات والإشعارات ربما تغيرت منذ فتح النموذج
+        if (hasStockLines || linkedDeliveryIds.length > 0) {
+          void catalog.reload();
+          priorDeliveries.reload();
+        }
         toast({
           title: t("تعذر حفظ الفاتورة"),
           description:
@@ -3151,6 +3378,10 @@ function InvoiceForm({
       if (data) {
         // البنود والعنوان والملاحظات محفوظة في قاعدة البيانات؛ لا حاجة لنسخة في المتصفح
         const savedInvoiceId = String(data.id ?? attemptId);
+        if (hasStockLines || linkedDeliveryIds.length > 0) {
+          void catalog.reload();
+          priorDeliveries.reload();
+        }
         // فاتورة من أمر بيع: يُربط الأمر بها (لا يؤثر على الترحيل أو الإرسال)
         void linkSalesOrderToInvoice(savedInvoiceId);
         const accounting = await supabase.rpc("post_sales_invoice_accounting", {
@@ -3447,6 +3678,81 @@ function InvoiceForm({
                   />
                 </div>
 
+                {/* S17: يظهر عند وجود منتج مخزني في البنود؛ الكمية تُصرف منه مع حفظ الفاتورة */}
+                {needsWarehouse && (
+                  <div className="space-y-1 md:col-span-2">
+                    <label className="text-[12px] font-semibold text-muted-foreground text-start block">
+                      {t("المستودع (تُصرف منه المنتجات) *")}
+                    </label>
+                    <select
+                      value={warehouseId}
+                      onChange={(event) => setWarehouseId(event.target.value)}
+                      className={`w-full px-3 py-2 border rounded-lg text-sm text-start bg-white ${warehouseId ? "border-border/60" : "border-amber-400"}`}
+                    >
+                      <option value="">{t("اختر المستودع")}</option>
+                      {warehouseId && !catalog.warehouses.some((row) => row.id === warehouseId) && (
+                        <option value={warehouseId}>{warehouseId}</option>
+                      )}
+                      {catalog.warehouses.map((row) => (
+                        <option key={row.id} value={row.id}>
+                          {row.code} — {row.nameAr}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-muted-foreground text-start">
+                      {t("عند الحفظ يُنشأ إشعار تسليم تلقائي وتُسجَّل تكلفة البضاعة المباعة")}
+                    </p>
+                  </div>
+                )}
+
+                {/* S17: إشعارات تسليم سابقة للعميل لم تُفوتر؛ المختار منها لا يُصرف مرة ثانية */}
+                {priorDeliveries.deliveries.length > 0 && (
+                  <div className="space-y-2 md:col-span-2 rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-start">
+                    <div>
+                      <p className="text-[12px] font-semibold text-sky-900">
+                        {t("إشعارات تسليم سابقة لهذا العميل لم تُفوتر")}
+                      </p>
+                      <p className="text-[11px] text-sky-900/70">
+                        {t("إن كانت الفاتورة عن بضاعة سُلّمت بأحدها فاختره: تُضاف أصنافه للبنود، ولا تُصرف كميته من المخزون مرة ثانية. الإشعار يُفوتر كله في فاتورة واحدة.")}
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      {priorDeliveries.deliveries.map((delivery) => (
+                        <label
+                          key={delivery.id}
+                          className="flex cursor-pointer items-start gap-2 rounded-md bg-white/70 px-2.5 py-2 text-sm hover:bg-white"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={linkedDeliveryIds.includes(delivery.id)}
+                            onChange={(event) => toggleDelivery(delivery, event.target.checked)}
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+                              <span className="font-semibold text-foreground" dir="ltr">{delivery.number}</span>
+                              <span className="text-xs text-muted-foreground">{delivery.date}</span>
+                              {delivery.warehouseName && (
+                                <span className="text-xs text-muted-foreground">{delivery.warehouseName}</span>
+                              )}
+                              {delivery.reference && (
+                                <span className="text-xs text-muted-foreground">
+                                  {t("المرجع")}: {delivery.reference}
+                                </span>
+                              )}
+                            </span>
+                            <span className="mt-0.5 block text-xs text-slate-600">
+                              {delivery.lines
+                                .map((line) => `${line.nameAr} × ${formatNumber(line.quantity, { maximumFractionDigits: 4 })} ${line.unit}`)
+                                .join("، ")}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* أمر الشراء والمشروع والمستودع أُزيلت: لم تكن تُحفظ في أي مكان. تُضاف لاحقًا مع أعمدة في القاعدة */}
                 <div className="space-y-1 md:col-span-2">
                   <label className="text-[12px] font-semibold text-muted-foreground text-start block">
@@ -3623,6 +3929,13 @@ function InvoiceForm({
                         </select>
                       </td>
                       <td className="pt-4 pl-1 align-top min-w-[320px]">
+                        {(catalog.items.length > 0 || item.productId) && (
+                          <ItemLinkButton
+                            item={item.productId ? catalogById.get(item.productId) : undefined}
+                            linkedId={item.productId}
+                            onOpen={() => setPickerLineId(item.id)}
+                          />
+                        )}
                         <textarea
                           rows={3}
                           placeholder={t("اكتب وصف البند...")}
@@ -3634,12 +3947,30 @@ function InvoiceForm({
                           }
                           className="w-full px-2 py-2 border border-border/60 rounded-xl text-sm text-start focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all min-h-[88px] resize-y"
                         />
+                        <StockHint
+                          item={item.productId ? catalogById.get(item.productId) : undefined}
+                          warehouseId={warehouseId}
+                          requested={item.productId ? requestedQuantity(items, item.productId) : 0}
+                          delivered={item.productId ? deliveredOf(item.productId) : 0}
+                          needsWarehouse
+                        />
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+            {pickerLineId !== null && (
+              <ItemPickerDialog
+                items={catalog.items}
+                warehouses={catalog.warehouses}
+                warehouseId={warehouseId}
+                priceKind="sale"
+                selectedId={items.find((line) => line.id === pickerLineId)?.productId}
+                onSelect={(product) => pickItem(pickerLineId, product)}
+                onClose={() => setPickerLineId(null)}
+              />
+            )}
             {creatingCustomer && <PartyRegistrationDialog kind="customer" b2c={invoiceType === "simplified"} onClose={() => setCreatingCustomer(false)} onCreated={(party) => { const option = { id: party.id, name: party.name, vatNumber: party.vatNumber, commercialRegistration: party.commercialRegistration, address: party.address }; setCustomerOptions((current) => [...current, option]); selectCustomerOption(option); setCreatingCustomer(false); }} />}
 
             {/* Totals */}

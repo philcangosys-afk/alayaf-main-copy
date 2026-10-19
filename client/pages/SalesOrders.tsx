@@ -37,6 +37,8 @@ import { dbErrorText } from "@/lib/dbErrors";
 import { selectAllRows } from "@/lib/ledgerData";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
 import { useI18n } from "@/i18n";
+import { ItemLinkButton, ItemPickerDialog, StockHint } from "@/components/ItemPicker";
+import { requestedQuantity, useItemCatalog, type CatalogItem } from "@/lib/itemCatalog";
 
 // بند أمر البيع كما يُحفظ في عمود items (jsonb) في قاعدة البيانات
 type OrderItem = {
@@ -517,6 +519,8 @@ const quotationItemsToOrderItems = (value: unknown): { items: OrderItem[]; hasOt
       price: toNumber(row.unitPrice ?? row.price),
       discount: toNumber(row.discount),
       taxPercent: tax === 0 ? 0 : SAUDI_STANDARD_VAT_RATE,
+      // S17: صنف بند العرض ينتقل للأمر
+      ...(row.productId ? { productId: String(row.productId) } : {}),
     };
   });
   return { items, hasOtherTax };
@@ -626,6 +630,8 @@ export default function SalesOrders() {
           id: order.id,
           customerId: order.customerId,
           customer: order.customer,
+          // S17: مستودع الأمر وأصنافه: المنتجات المخزنية تُصرف منه مع الفاتورة
+          warehouseId: order.warehouseId,
           items: items.map((item) => ({
             description: String(item.description ?? ""),
             quantity: toNumber(item.quantity),
@@ -633,6 +639,7 @@ export default function SalesOrders() {
             discount: toNumber(item.discount),
             // الفواتير تقبل 15% فقط
             taxPercent: SAUDI_STANDARD_VAT_RATE,
+            ...(item.productId ? { productId: item.productId } : {}),
           })),
         },
       },
@@ -1351,7 +1358,14 @@ function OrderEditor({
   onSaved: (order: SalesOrder) => void;
 }) {
   const { t, direction, formatNumber } = useSalesOrdersI18n();
-  const { customers, warehouses, products, quotations, loaded } = useOrderReferenceData(t);
+  const { customers, warehouses, quotations, loaded } = useOrderReferenceData(t);
+  // S17: الأصناف والخدمات بأسعارها وكمياتها (لمن يملك المبيعات ولو بلا صلاحية المخزون)
+  const catalog = useItemCatalog();
+  const catalogById = useMemo(
+    () => new Map(catalog.items.map((item) => [item.id, item] as const)),
+    [catalog.items],
+  );
+  const [pickerLineId, setPickerLineId] = useState<number | null>(null);
   const [quotationId, setQuotationId] = useState(order?.quotationId ?? "");
   const [customerId, setCustomerId] = useState(order?.customerId ?? "");
   const [customer, setCustomer] = useState(order?.customer ?? "");
@@ -1419,11 +1433,24 @@ function OrderEditor({
     setItems((prev) => prev.filter((item) => item.id !== id));
   };
 
-  const chooseProduct = (lineId: number, productId: string) => {
-    const product = products.find((row) => row.id === productId);
-    updateItem(
-      lineId,
-      product ? { productId: product.id, description: product.name } : { productId: undefined },
+  // S17: اختيار صنف للبند يعبّئ الوصف وسعر البيع (قابلان للتعديل)؛ «بند حر» يفك الربط
+  const pickItem = (lineId: number, product: CatalogItem | null) => {
+    setPickerLineId(null);
+    if (!product) {
+      updateItem(lineId, { productId: undefined });
+      return;
+    }
+    setItems((prev) =>
+      prev.map((item) =>
+        item.id === lineId
+          ? {
+              ...item,
+              productId: product.id,
+              description: product.nameAr,
+              price: product.salePrice > 0 ? product.salePrice : item.price,
+            }
+          : item,
+      ),
     );
   };
 
@@ -1972,23 +1999,12 @@ function OrderEditor({
                         />
                       </td>
                       <td className="pt-4 pl-1 align-top min-w-[320px] space-y-1.5">
-                        {products.length > 0 && (
-                          <select
-                            value={item.productId ?? ""}
-                            onChange={(event) => chooseProduct(item.id, event.target.value)}
-                            className="w-full h-9 px-2 border border-border/60 rounded-xl text-xs text-start bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
-                          >
-                            <option value="">{t("اختر صنفًا (اختياري)")}</option>
-                            {item.productId && !products.some((row) => row.id === item.productId) && (
-                              <option value={item.productId}>{item.description || item.productId}</option>
-                            )}
-                            {products.map((row) => (
-                              <option key={row.id} value={row.id}>
-                                {[row.sku, row.name].filter(Boolean).join(" - ")}
-                                {row.unit ? ` (${row.unit})` : ""}
-                              </option>
-                            ))}
-                          </select>
+                        {(catalog.items.length > 0 || item.productId) && (
+                          <ItemLinkButton
+                            item={item.productId ? catalogById.get(item.productId) : undefined}
+                            linkedId={item.productId}
+                            onOpen={() => setPickerLineId(item.id)}
+                          />
                         )}
                         <textarea
                           rows={3}
@@ -2001,6 +2017,11 @@ function OrderEditor({
                           placeholder={t("اكتب وصف البند (اختياري)...")}
                           className="w-full px-2 py-2 border border-border/60 rounded-xl text-sm text-start focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-all min-h-[88px] resize-y"
                         />
+                        <StockHint
+                          item={item.productId ? catalogById.get(item.productId) : undefined}
+                          warehouseId={warehouseId}
+                          requested={item.productId ? requestedQuantity(items.map((line) => ({ productId: line.productId, quantity: line.quantity })), item.productId) : 0}
+                        />
                         {issue && (
                           <p className="text-[11px] font-semibold text-red-600">{t(issue)}</p>
                         )}
@@ -2010,6 +2031,17 @@ function OrderEditor({
                 })}
               </tbody>
             </table>
+            {pickerLineId !== null && (
+              <ItemPickerDialog
+                items={catalog.items}
+                warehouses={catalog.warehouses}
+                warehouseId={warehouseId}
+                priceKind="sale"
+                selectedId={items.find((line) => line.id === pickerLineId)?.productId}
+                onSelect={(product) => pickItem(pickerLineId, product)}
+                onClose={() => setPickerLineId(null)}
+              />
+            )}
 
             <div className="border-t border-slate-200 pt-4 flex justify-center mt-8">
               <div className="w-96 flex justify-between">

@@ -53,6 +53,15 @@ export function inventoryErrorText(message: string, t: Translate = keepSource): 
   if (has("INVENTORY_PRODUCT_POSTING_CLASS_IMMUTABLE")) return t("لا يمكن تغيير نوع الصنف أو وحدته أو حساب المخزون أو حساب التكلفة بعد تسجيل حركات مخزون عليه.");
   if (has("INVENTORY_PRODUCT_SKU_INVALID")) return t("رمز الصنف غير صالح: استخدم أحرفًا إنجليزية كبيرة وأرقامًا والرموز . _ - فقط، أو اتركه فارغًا ليُنشأ تلقائيًا.");
   if (has("INVENTORY_PRODUCT_HAS_MOVEMENTS")) return t("لا يمكن حذف صنف لديه حركات مخزون. أوقفه بإلغاء خيار «نشط» بدلًا من الحذف.");
+  // S17: أسعار الصنف وبياناته، والصرف التلقائي مع فاتورة المبيعات
+  if (has("INVENTORY_PRODUCT_PRICE_INVALID")) return t("الأسعار وحد إعادة الطلب أرقام موجبة أو صفر.");
+  if (has("INVENTORY_PRODUCT_BARCODE_EXISTS")) return t("الباركود مستخدم لصنف آخر في المنشأة.");
+  if (has("INVENTORY_PRODUCT_BARCODE_INVALID")) return t("الباركود غير صالح: أحرف إنجليزية وأرقام والرموز . _ - فقط، حتى 50 خانة.");
+  if (has("INVENTORY_PRODUCT_DESCRIPTION_TOO_LONG")) return t("الوصف أطول من 500 حرف.");
+  if (has("INVENTORY_PURCHASE_ACCOUNT_CLASS_INVALID")) return t("حساب مصروف الشراء للخدمة يجب أن يكون حسابًا طرفيًا يبدأ رمزه بالرقم 5.");
+  if (has("INVENTORY_ISSUE_INVOICE_AUTO_ISSUED")) return t("عولج مخزون هذه الفاتورة عند حفظها (صرف تلقائي أو إشعارات تسليم سابقة مربوطة بها)، فلا يُنشأ لها إشعار تسليم يدوي.");
+  if (has("INVENTORY_RECEIPT_ORDER_AUTO_RECEIVED")) return t("بضاعة أمر الشراء هذا استُلمت مع فاتورته؛ لا يُرحَّل له سند استلام يدوي حتى لا تُستلم مرتين.");
+  if (has("INVENTORY_ISSUE_SOURCE_IMMUTABLE")) return t("لا يمكن تغيير مصدر سند الصرف.");
   if (has("INVENTORY_WAREHOUSE_CODE_INVALID")) return t("رمز المستودع غير صالح: استخدم أحرفًا إنجليزية كبيرة وأرقامًا والرموز . _ - فقط.");
   if (has("INVENTORY_WAREHOUSE_HAS_MOVEMENTS")) return t("لا يمكن حذف مستودع لديه حركات مخزون. أوقفه بإلغاء خيار «نشط» بدلًا من الحذف.");
 

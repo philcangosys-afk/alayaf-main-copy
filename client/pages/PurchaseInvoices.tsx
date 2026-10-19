@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Layout from "@/components/Layout";
 import { purchasesFeatures } from "./Purchases";
@@ -30,6 +30,8 @@ import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
 import { dbErrorOr } from "@/lib/dbErrors";
 import PartyRegistrationDialog from "@/components/PartyRegistrationDialog";
+import { ItemLinkButton, ItemPickerDialog } from "@/components/ItemPicker";
+import { loadPurchaseStockContext, useItemCatalog, type CatalogItem } from "@/lib/itemCatalog";
 import { canManagePerm, checkPerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
@@ -57,6 +59,8 @@ type InvoiceItem = {
   // سعر البند وخصمه بعملة فاتورة المورد الأجنبي (للتوثيق؛ القيد بالريال)
   foreignUnitPrice?: number;
   foreignDiscount?: number;
+  // S17: الصنف أو الخدمة المختارة للبند (اختياري)
+  productId?: string;
 };
 
 // فاتورة المورد غير المقيم: خدمات (احتساب عكسي — الخانة 9)، بضائع (ضريبتها في البيان الجمركي — الخانة 8)، أو غير خاضعة
@@ -1078,11 +1082,16 @@ function ItemsTable({
   foreignCurrency = "SAR",
   exchangeRate = 1,
   importTreatment = "",
+  catalogItems,
+  onOpenPicker,
 }: {
   items: InvoiceItem[];
   onAdd: () => void;
   onUpdate: (id: number, changes: Partial<InvoiceItem>) => void;
   onRemove: (id: number) => void;
+  // S17 (نموذج الإنشاء فقط): الأصناف والخدمات، وفتح نافذة الاختيار للبند
+  catalogItems?: CatalogItem[];
+  onOpenPicker?: (lineId: number) => void;
   accentClass?: string;
   // "no": المورد غير مسجل ضريبيًا فلا تُطالَب ضريبة مدخلات (0% فقط)
   vendorVat?: VendorVatState;
@@ -1115,6 +1124,10 @@ function ItemsTable({
   }, []);
   const formatAmount = (value: number) =>
     formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // S17: المنتج المخزني حسابه حساب البضاعة المستلمة غير المفوترة (يُقفل)، والخدمة حسابها قابل للتغيير
+  const catalogById = new Map((catalogItems ?? []).map((product) => [product.id, product] as const));
+  const isStockLine = (item: InvoiceItem) =>
+    Boolean(item.productId) && catalogById.get(item.productId as string)?.itemType !== "service";
   // نفس تقريب القاعدة لكل بند، فيطابق المعروض ما سيُرحَّل (بالريال)
   const totals = sarItems.reduce(
     (acc, item) => {
@@ -1273,12 +1286,25 @@ function ItemsTable({
                       />
                     </td>
                     <td className="pt-3 px-1 align-top">
-                      <select value={item.accountCode} onChange={(e) => onUpdate(item.id, { accountCode: e.target.value })} className={inputClass}>
+                      <select
+                        value={item.accountCode}
+                        disabled={isStockLine(item)}
+                        title={isStockLine(item) ? t("المنتج المخزني يُسجَّل على حساب البضاعة المستلمة غير المفوترة") : undefined}
+                        onChange={(e) => onUpdate(item.id, { accountCode: e.target.value })}
+                        className={`${inputClass} disabled:bg-slate-100`}
+                      >
                         <option value="">{t("اختر حساب المصروف")}</option>
                         {expenseAccounts.map((account) => <option key={account.code} value={account.code}>{account.code} - {account.name_ar}{account.code === "2113" ? ` (${t("بضاعة مخزنية مستلمة")})` : account.code === CUSTOMS_CLEARING_ACCOUNT ? ` (${t("جمارك دفعها المخلّص نيابة عنا — بلا ضريبة")})` : ""}</option>)}
                       </select>
                     </td>
                     <td className="pt-3 pl-1 align-top min-w-[260px]">
+                      {onOpenPicker && ((catalogItems ?? []).length > 0 || item.productId) && (
+                        <ItemLinkButton
+                          item={item.productId ? catalogById.get(item.productId) : undefined}
+                          linkedId={item.productId}
+                          onOpen={() => onOpenPicker(item.id)}
+                        />
+                      )}
                       <input
                         value={item.description}
                         onChange={(e) =>
@@ -1631,6 +1657,8 @@ const purchaseOrderInitial = (source: PurchaseOrderInvoiceSource): Partial<Purch
     unitPrice: Number(item.price) || 0,
     discount: Number(item.discount) || 0,
     taxPercent: Number(item.taxPercent) === SAUDI_STANDARD_VAT_RATE ? SAUDI_STANDARD_VAT_RATE : 0,
+    // S17: صنف بند الأمر ينتقل للفاتورة (المنتج المخزني على حساب البضاعة المستلمة غير المفوترة)
+    ...(item.productId ? { productId: String(item.productId) } : {}),
   })),
 });
 
@@ -1658,55 +1686,83 @@ function InvoiceForm({
     updateItem,
     removeItem,
   } = useInvoiceForm(fromOrder ? purchaseOrderInitial(fromOrder) : undefined);
-  // حساب البضاعة المستلمة غير المفوترة الذي وُجّهت إليه بنود الأصناف المستلمة (للتنبيه)
-  const [grniAccount, setGrniAccount] = useState("");
+  // S17: حساب البضاعة المستلمة غير المفوترة، وسندات الاستلام اليدوية المرحّلة لأمر الشراء (من الخادم:
+  // صاحب المشتريات لا يقرأ المخزون ولا قواعد الترحيل مباشرة)
+  const [orderReceipts, setOrderReceipts] = useState<string[]>([]);
+  const [stockAccount, setStockAccount] = useState("");
   useEffect(() => {
-    if (!fromOrder) return;
-    navigate(location.pathname, { replace: true, state: null });
-    const productLines = (fromOrder.items ?? [])
-      .map((item, index) => (item.productId ? { id: index + 1, productId: String(item.productId) } : null))
-      .filter((line): line is { id: number; productId: string } => line !== null);
-    if (productLines.length === 0) return;
+    if (fromOrder) navigate(location.pathname, { replace: true, state: null });
     let cancelled = false;
-    const applyGrniAccount = async () => {
-      // سند استلام مرحّل لهذا الأمر: purchase_order_id نص يُدخل فيه رقم الأمر (أو معرّفه)
-      const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${char}`);
-      const reference = String(fromOrder.referenceNo ?? "").trim();
-      const lookups = await Promise.all([
-        supabase.from("inventory_receipts").select("id").eq("status", "posted").eq("purchase_order_id", fromOrder.id),
-        reference
-          ? supabase.from("inventory_receipts").select("id").eq("status", "posted").ilike("purchase_order_id", escapeLike(reference))
-          : Promise.resolve({ data: [] as { id: string }[], error: null }),
-      ]);
-      const receiptIds = Array.from(
-        new Set(lookups.flatMap((result) => (result.error ? [] : ((result.data ?? []) as { id: unknown }[]).map((row) => String(row.id))))),
-      );
-      if (cancelled || receiptIds.length === 0) return;
-      // الأصناف المستلمة فعلًا في تلك السندات؛ إن تعذرت قراءتها تُعامل بنود الأصناف كلها كمستلمة
-      const { data: lines, error: linesError } = await supabase
-        .from("inventory_receipt_lines")
-        .select("product_id")
-        .in("receipt_id", receiptIds);
-      const received = linesError ? null : new Set(((lines ?? []) as { product_id: unknown }[]).map((line) => String(line.product_id)));
-      const { data: rule } = await supabase
-        .from("accounting_posting_rules")
-        .select("grni_account_code")
-        .eq("rule_code", "sales_default")
-        .maybeSingle();
-      const grni = String(rule?.grni_account_code ?? "").trim() || "2113";
-      const targets = productLines.filter((line) => !received || received.has(line.productId));
-      if (cancelled || targets.length === 0) return;
-      targets.forEach((line) => updateItem(line.id, { accountCode: grni }));
-      setGrniAccount(grni);
-    };
-    void applyGrniAccount();
+    void loadPurchaseStockContext(fromOrder?.id ?? "", String(fromOrder?.referenceNo ?? "").trim()).then((context) => {
+      if (cancelled) return;
+      setStockAccount(context.grniAccountCode || "2113");
+      setOrderReceipts(context.orderReceipts);
+    });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // S17: الأصناف والخدمات، والاستلام في المخزون مع الفاتورة
+  const catalog = useItemCatalog();
+  const catalogById = useMemo(
+    () => new Map(catalog.items.map((product) => [product.id, product] as const)),
+    [catalog.items],
+  );
+  const [pickerLineId, setPickerLineId] = useState<number | null>(null);
+  // الاستلام: «now» مع الفاتورة، أو «later» بسند استلام منفصل (سابق أو لاحق). الاختيار إلزامي عند وجود منتج مخزني،
+  // فلا تُستلم بضاعة استُلمت بسند سابق مرة ثانية دون قصد
+  const [receiveMode, setReceiveMode] = useState<"" | "now" | "later">("");
+  const [warehouseId, setWarehouseId] = useState("");
+  // صنف غير موجود في القائمة (موقوف) يُعامل منتجًا مخزنيًا حتى ترفضه القاعدة برسالة واضحة
+  const stockLineIds = items
+    .filter((item) => item.productId && catalogById.get(item.productId)?.itemType !== "service")
+    .map((item) => item.id);
+  const hasStockLines = stockLineIds.length > 0;
+  // بنود المنتجات المخزنية (المختارة أو من أمر الشراء) على حساب البضاعة المستلمة غير المفوترة
+  useEffect(() => {
+    if (!stockAccount || !catalog.loaded) return;
+    items.forEach((item) => {
+      if (stockLineIds.includes(item.id) && item.accountCode !== stockAccount) {
+        updateItem(item.id, { accountCode: stockAccount });
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockAccount, catalog.loaded, stockLineIds.join(",")]);
+  // أمر شراء له سند استلام يدوي مرحّل: بضاعته استُلمت، فلا استلام مع الفاتورة (القاعدة ترفضه أيضًا)
+  const orderReceived = orderReceipts.length > 0;
+  useEffect(() => {
+    if (orderReceived) setReceiveMode("later");
+  }, [orderReceived]);
+  const receiveStock = receiveMode === "now" && !orderReceived;
+  useEffect(() => {
+    if (hasStockLines && receiveStock && !warehouseId && catalog.warehouses.length === 1) {
+      setWarehouseId(catalog.warehouses[0].id);
+    }
+  }, [hasStockLines, receiveStock, warehouseId, catalog.warehouses]);
+
   // المورد غير المقيم بعملة أجنبية: البنود تُدخل بعملته وتُرسل للقاعدة بالريال
   const isForeign = importInfo.nonResident && importInfo.currency !== "SAR";
+  // S17: اختيار صنف للبند: الوصف والوحدة وسعر الشراء (بالريال فقط) والحساب
+  const pickItem = (lineId: number, product: CatalogItem | null) => {
+    setPickerLineId(null);
+    if (!product) {
+      updateItem(lineId, { productId: undefined });
+      return;
+    }
+    const current = items.find((item) => item.id === lineId);
+    updateItem(lineId, {
+      productId: product.id,
+      description: product.nameAr,
+      unit: product.unit,
+      unitPrice: !isForeign && product.purchasePrice ? product.purchasePrice : (current?.unitPrice ?? 0),
+      accountCode:
+        product.itemType === "product"
+          ? stockAccount || "2113"
+          : product.purchaseAccountCode ||
+            (current?.accountCode && current.accountCode !== (stockAccount || "2113") ? current.accountCode : "511"),
+    });
+  };
   // سعر الصرف بست خانات كما يُحفظ في القاعدة، فيطابق التحويل هنا ما تتحقق منه
   const exchangeRate = isForeign ? Number((Number(importInfo.rate) || 0).toFixed(6)) : 1;
   const sarItems = isForeign && exchangeRate > 0 ? items.map((item) => toSarItem(item, exchangeRate)) : items;
@@ -1806,6 +1862,15 @@ function InvoiceForm({
         return;
       }
     }
+    // S17: المنتجات المخزنية: تحديد الاستلام إلزامي، والاستلام مع الفاتورة يحتاج مستودعًا
+    if (hasStockLines && !receiveMode) {
+      setError(t("حدد هل تُستلم المنتجات المخزنية مع الفاتورة الآن أم بسند استلام منفصل"));
+      return;
+    }
+    if (hasStockLines && receiveStock && !warehouseId) {
+      setError(t("اختر المستودع الذي تُستلم فيه المنتجات، أو اختر «استُلمت أو تُستلم بسند استلام منفصل»"));
+      return;
+    }
     // رقم فاتورة المورد إلزامي ولا يتكرر لنفس المورد (منع تسجيل الفاتورة مرتين)
     const supplierInvoiceNo = form.referenceNo.trim();
     if (!supplierInvoiceNo) {
@@ -1892,6 +1957,10 @@ function InvoiceForm({
             supplierCurrency: isForeign ? importInfo.currency : "",
             exchangeRate: isForeign ? exchangeRate : "",
             supplierCurrencyTotal: isForeign ? foreignTotal : "",
+            // S17: استلام المنتجات المخزنية في المستودع مع الفاتورة
+            receiveStock: hasStockLines && receiveStock,
+            warehouseId: hasStockLines && receiveStock ? warehouseId : "",
+            purchaseOrderId: fromOrder?.id ?? "",
             items: sarItems.map((item, index) => ({
               id: item.id,
               description: item.description,
@@ -1904,6 +1973,7 @@ function InvoiceForm({
               ...(isForeign
                 ? { foreignUnitPrice: Number(items[index].unitPrice) || 0, foreignDiscount: Number(items[index].discount) || 0 }
                 : {}),
+              ...(item.productId ? { productId: item.productId } : {}),
             })),
           },
         });
@@ -1923,6 +1993,20 @@ function InvoiceForm({
             ? t("إنشاء فواتير المشتريات يحتاج صلاحية إدارة فواتير المشتريات")
             : String(postError.message ?? "").includes("PURCHASE_ITEM_ACCOUNT_NOT_ALLOWED")
             ? t("حساب البند يجب أن يكون من حسابات المصروفات أو البضاعة المستلمة غير المفوترة")
+            : String(postError.message ?? "").includes("PURCHASE_STOCK_ITEM_ACCOUNT_INVALID")
+            ? t("المنتج المخزني يُسجَّل على حساب البضاعة المستلمة غير المفوترة؛ أعد اختيار الصنف للبند")
+            : String(postError.message ?? "").includes("PURCHASE_ITEM_PRODUCT_INVALID")
+            ? t("أحد الأصناف المختارة غير موجود أو موقوف؛ اختره من جديد أو اجعله بندًا حرًا")
+            : String(postError.message ?? "").includes("PURCHASE_RECEIPT_WAREHOUSE")
+            ? t("المستودع المختار للاستلام غير موجود أو موقوف؛ اختر مستودعًا نشطًا")
+            : String(postError.message ?? "").includes("PURCHASE_ORDER_ALREADY_RECEIVED")
+            ? t("بضاعة أمر الشراء هذا استُلمت بسند استلام مرحّل؛ اختر «الاستلام بسند منفصل» حتى لا تُستلم مرتين")
+            : String(postError.message ?? "").includes("PURCHASE_RECEIPT_DATE_INVALID")
+            ? t("تاريخ الفاتورة بعد اليوم؛ الاستلام في المخزون بتاريخ اليوم أو قبله. اختر «الاستلام بسند منفصل» أو صحّح التاريخ")
+            : String(postError.message ?? "").includes("PURCHASE_STOCK_ITEM_QUANTITY_INVALID")
+            ? t("كمية المنتج المخزني 0.0001 فأكثر")
+            : String(postError.message ?? "").includes("INVENTORY_GRNI_ACCOUNT_REQUIRED")
+            ? t("حساب البضاعة المستلمة غير المفوترة غير محدد في قواعد الترحيل")
             : String(postError.message ?? "").includes("PURCHASE_IMPORT_TREATMENT_REQUIRED")
             ? t("حدد نوع فاتورة المورد غير المقيم: خدمات (احتساب عكسي) أو بضائع (البيان الجمركي) أو غير خاضعة")
             : String(postError.message ?? "").includes("PURCHASE_SUPPLIER_CURRENCY")
@@ -2034,9 +2118,11 @@ function InvoiceForm({
             {t("فاتورة من أمر الشراء")} {fromOrder.referenceNo || "-"}
           </p>
           <p>{t("بعد حفظ الفاتورة يُغلق أمر الشراء ويُربط بها. أدخل رقم فاتورة المورد وراجع البنود قبل الحفظ.")}</p>
-          {grniAccount && (
+          {orderReceived && (
             <p>
-              {t("بنود الأصناف المستلمة بسند استلام مرحّل وُجّهت إلى حساب البضاعة المستلمة غير المفوترة")} ({grniAccount})
+              {t("بضاعة هذا الأمر استُلمت بسند استلام مرحّل")} ({orderReceipts.join("، ")})
+              {". "}
+              {t("بنود المنتجات على حساب البضاعة المستلمة غير المفوترة، ولا تُستلم مرة ثانية مع الفاتورة.")}
             </p>
           )}
           {!fromOrder.vendorId && (
@@ -2107,6 +2193,76 @@ function InvoiceForm({
       )}
       {creatingVendor && <PartyRegistrationDialog kind="vendor" onClose={() => setCreatingVendor(false)} onCreated={(party) => { setField("vendorId", party.id); setField("vendor", party.name); setVendorVat(SAUDI_VAT_NUMBER_PATTERN.test(String(party.vatNumber ?? "").trim()) ? "yes" : "no"); setCreatingVendor(false); }} />}
 
+      {hasStockLines && (
+        <div className="bg-white rounded-lg border border-sky-200 shadow-sm overflow-hidden">
+          <div className="bg-sky-50 px-4 py-2 text-right font-semibold text-sky-900">
+            {t("المنتجات المخزنية في الفاتورة")}
+          </div>
+          <div className="p-4 space-y-3 text-right">
+            <fieldset className="space-y-2">
+              <legend className="mb-1 text-sm font-medium text-slate-700">{t("هل استُلمت البضاعة؟")}*</legend>
+              <label
+                className={`flex items-start gap-2 rounded border px-3 py-2 text-sm ${
+                  orderReceived ? "cursor-not-allowed text-slate-400" : "cursor-pointer hover:bg-slate-50"
+                } ${receiveMode === "now" ? "border-sky-400 bg-sky-50/60" : "border-slate-200"}`}
+              >
+                <input
+                  type="radio"
+                  name="receive-mode"
+                  className="mt-1"
+                  disabled={orderReceived}
+                  checked={receiveMode === "now"}
+                  onChange={() => setReceiveMode("now")}
+                />
+                <span>
+                  <span className="block font-medium">{t("تُستلم الآن مع الفاتورة")}</span>
+                  <span className="block text-xs text-slate-500">{t("تزيد الكميات في المستودع المختار بتكلفة البنود")}</span>
+                </span>
+              </label>
+              <label
+                className={`flex cursor-pointer items-start gap-2 rounded border px-3 py-2 text-sm hover:bg-slate-50 ${
+                  receiveMode === "later" ? "border-sky-400 bg-sky-50/60" : "border-slate-200"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="receive-mode"
+                  className="mt-1"
+                  checked={receiveMode === "later"}
+                  onChange={() => setReceiveMode("later")}
+                />
+                <span>
+                  <span className="block font-medium">{t("استُلمت أو تُستلم بسند استلام منفصل")}</span>
+                  <span className="block text-xs text-slate-500">{t("لا تتغير الكميات مع الفاتورة")}</span>
+                </span>
+              </label>
+            </fieldset>
+            {receiveStock ? (
+              <div className="grid grid-cols-1 md:grid-cols-[170px_1fr] gap-3 items-center">
+                <label className="text-sm font-medium text-slate-700">{t("مستودع الاستلام")}*</label>
+                <select
+                  value={warehouseId}
+                  onChange={(e) => setWarehouseId(e.target.value)}
+                  className={`w-full h-10 px-3 py-2 border rounded text-sm text-right outline-none ${warehouseId ? "border-slate-300" : "border-amber-400"}`}
+                >
+                  <option value="">{t("اختر المستودع")}</option>
+                  {catalog.warehouses.map((row) => (
+                    <option key={row.id} value={row.id}>{row.code} — {row.nameAr}</option>
+                  ))}
+                </select>
+                <p className="md:col-span-2 text-xs text-slate-500">
+                  {t("عند الحفظ يُنشأ سند استلام تلقائي بتكلفة البنود: مدين المخزون / دائن البضاعة المستلمة غير المفوترة، فيُقفل مع الفاتورة.")}
+                </p>
+              </div>
+            ) : receiveMode === "later" ? (
+              <p className="text-xs text-amber-700">
+                {t("البنود على حساب البضاعة المستلمة غير المفوترة، والكميات تُستلم بسند الاستلام (في المخزون).")}
+              </p>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       <ItemsTable
         items={items}
         onAdd={addItem}
@@ -2116,7 +2272,20 @@ function InvoiceForm({
         foreignCurrency={importInfo.nonResident ? importInfo.currency : "SAR"}
         exchangeRate={exchangeRate}
         importTreatment={importInfo.nonResident ? importInfo.treatment : ""}
+        catalogItems={catalog.items}
+        onOpenPicker={setPickerLineId}
       />
+      {pickerLineId !== null && (
+        <ItemPickerDialog
+          items={catalog.items}
+          warehouses={catalog.warehouses}
+          warehouseId={warehouseId}
+          priceKind="purchase"
+          selectedId={items.find((line) => line.id === pickerLineId)?.productId}
+          onSelect={(product) => pickItem(pickerLineId, product)}
+          onClose={() => setPickerLineId(null)}
+        />
+      )}
 
       <div className="flex justify-center gap-4 pt-2">
         <button

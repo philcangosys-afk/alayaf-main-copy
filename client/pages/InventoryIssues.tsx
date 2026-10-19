@@ -33,6 +33,8 @@ type InventoryIssue = {
   status: "draft" | "posted";
   accountingStatus: "pending" | "posted" | "not_required";
   journalEntryId: string;
+  // S17: sales_invoice = صُرف تلقائيًا مع فاتورة المبيعات
+  source: string;
   lines: IssueLine[];
 };
 
@@ -78,7 +80,7 @@ export default function InventoryIssues() {
     setLoading(true);
     setError("");
     const [issueResult, lineResult, productResult, warehouseResult, customerResult, invoiceResult, balanceResult, accountResult] = await Promise.all([
-      selectAllRows((from, to) => supabase.from("inventory_issues").select("id, issue_number, issue_date, issue_type, warehouse_id, customer_id, sales_invoice_id, destination, reference, notes, expense_account_code, status, accounting_status, accounting_journal_entry_id").order("created_at", { ascending: false }).order("id").range(from, to)),
+      selectAllRows((from, to) => supabase.from("inventory_issues").select("*").order("created_at", { ascending: false }).order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("inventory_issue_lines").select("id, issue_id, product_id, quantity, unit_cost").order("created_at").order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("inventory_products").select("id, sku, name_ar, unit").eq("item_type", "product").eq("active", true).order("sku").order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("inventory_warehouses").select("id, code, name_ar").eq("active", true).order("code").order("id").range(from, to)),
@@ -121,6 +123,7 @@ export default function InventoryIssues() {
       status: row.status as InventoryIssue["status"],
       accountingStatus: row.accounting_status as InventoryIssue["accountingStatus"],
       journalEntryId: String(row.accounting_journal_entry_id ?? ""),
+      source: String(row.source ?? "manual"),
       lines: (lineResult.data ?? []).filter((line) => line.issue_id === row.id).map((line, index) => ({ id: index + 1, productId: String(line.product_id), quantity: String(line.quantity), unitCost: String(line.unit_cost ?? "") })),
     })));
     setLoading(false);
@@ -171,6 +174,10 @@ export default function InventoryIssues() {
   const invoiceCustomerName = (invoice: SalesInvoice) => customers.find((customer) => customer.id === invoice.customerId)?.name || invoice.customer || "—";
   // التسليم الجزئي مسموح؛ ننبه فقط إن وُجدت إشعارات تسليم مرحّلة أخرى لنفس الفاتورة
   const otherPostedDeliveries = salesInvoiceId ? issues.filter((issue) => issue.issueType === "delivery" && issue.status === "posted" && issue.salesInvoiceId === salesInvoiceId && issue.id !== editingId) : [];
+  // S17: فواتير العميل التي صُرف مخزونها معها: إشعار يدوي لبضاعتها يصرفها مرة ثانية
+  const autoIssuedInvoices = issueType === "delivery" && customerId && !salesInvoiceId
+    ? Array.from(new Set(issues.filter((issue) => issue.source === "sales_invoice" && issue.customerId === customerId).map((issue) => issue.salesInvoiceId))).slice(0, 5)
+    : [];
   const visibleIssues = isDeliveryPath ? issues.filter((issue) => issue.issueType === "delivery") : issues;
 
   const save = async () => {
@@ -321,6 +328,7 @@ ${isDelivery
               <label className="text-xs text-slate-600">{t("المرجع")}<input value={reference} onChange={(event) => setReference(event.target.value)} className="mt-1 h-10 w-full rounded border px-3" /></label>
               <label className="text-xs text-slate-600 md:col-span-2">{t("ملاحظات")}<input value={notes} onChange={(event) => setNotes(event.target.value)} className="mt-1 h-10 w-full rounded border px-3" /></label>
             </div>
+            {autoIssuedInvoices.length > 0 && <div className="mt-3 rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">{t("لهذا العميل فواتير مبيعات صُرف مخزونها معها تلقائيًا")}: <span className="font-mono font-semibold" dir="ltr">{autoIssuedInvoices.join("، ")}</span>. {t("لا تُنشئ إشعار تسليم لبضاعة هذه الفواتير؛ الإشعار اليدوي للبضاعة التي لم تُفوتر بعد، وتُختار في الفاتورة عند إصدارها.")}</div>}
             {otherPostedDeliveries.length > 0 && <div className="mt-3 rounded border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">{t("تنبيه: توجد إشعارات تسليم مرحّلة سابقاً لهذه الفاتورة")}: <span className="font-mono font-semibold">{otherPostedDeliveries.map((issue) => issue.number).join(direction === "rtl" ? "، " : ", ")}</span>. {t("التسليم الجزئي مسموح؛ تأكد من عدم تكرار تسليم الكميات نفسها.")}</div>}
 
             <div className="mt-5 overflow-x-auto">
@@ -350,7 +358,7 @@ ${isDelivery
           <div className="overflow-x-auto"><table className="min-w-full text-sm">
             <thead className="bg-slate-100 text-slate-600"><tr><th className="p-3">{t(isDeliveryPath ? "رقم الإشعار" : "رقم السند")}</th><th className="p-3">{t("النوع")}</th><th className="p-3">{t("التاريخ")}</th><th className="p-3">{t("المستودع")}</th><th className="p-3">{t("العميل")}</th><th className="p-3">{t("حساب التحميل")}</th><th className="p-3">{t("التكلفة")}</th><th className="p-3">{t("الحالة")}</th><th className="p-3">{t("الإجراءات")}</th></tr></thead>
             <tbody>{loading ? <tr><td colSpan={9} className="py-14 text-center">{t("جاري التحميل...")}</td></tr> : visibleIssues.length === 0 ? <tr><td colSpan={9} className="py-14 text-center text-slate-400">{t(isDeliveryPath ? "لا توجد إشعارات تسليم" : "لا توجد سندات صرف")}</td></tr> : visibleIssues.map((issue) => <tr key={issue.id} className="border-t">
-              <td className="p-3 font-mono">{issue.number}</td><td className="p-3 text-center">{t(issue.issueType === "delivery" ? "إشعار تسليم" : "صرف داخلي")}</td><td className="p-3 text-center">{issue.date}</td><td className="p-3 text-center">{warehouseName(issue.warehouseId)}</td><td className="p-3 text-center">{customerName(issue.customerId)}</td><td className={`p-3 text-center text-xs ${issue.issueType === "issue" && issue.expenseAccountCode ? "text-slate-700" : "text-slate-400"}`}>{chargeAccountText(issue)}</td><td className="p-3 text-center font-semibold">{formatNumber(issue.lines.reduce((sum, line) => sum + numberValue(line.quantity) * numberValue(line.unitCost), 0), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td className="p-3 text-center"><span className={`rounded px-2 py-1 text-xs font-semibold ${issue.status === "posted" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{t(issue.status === "posted" ? "مرحّل" : "مسودة")}</span></td>
+              <td className="p-3 font-mono">{issue.number}</td><td className="p-3 text-center">{t(issue.issueType === "delivery" ? "إشعار تسليم" : "صرف داخلي")}{issue.source === "sales_invoice" && <span className="mt-0.5 block text-[11px] text-sky-700">{t("مع فاتورة المبيعات")} <span dir="ltr">{issue.salesInvoiceId}</span></span>}</td><td className="p-3 text-center">{issue.date}</td><td className="p-3 text-center">{warehouseName(issue.warehouseId)}</td><td className="p-3 text-center">{customerName(issue.customerId)}</td><td className={`p-3 text-center text-xs ${issue.issueType === "issue" && issue.expenseAccountCode ? "text-slate-700" : "text-slate-400"}`}>{chargeAccountText(issue)}</td><td className="p-3 text-center font-semibold">{formatNumber(issue.lines.reduce((sum, line) => sum + numberValue(line.quantity) * numberValue(line.unitCost), 0), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td><td className="p-3 text-center"><span className={`rounded px-2 py-1 text-xs font-semibold ${issue.status === "posted" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{t(issue.status === "posted" ? "مرحّل" : "مسودة")}</span></td>
               <td className="p-3"><div className="flex justify-center gap-1">{issue.status === "draft" && <><button disabled={busy} onClick={() => startEdit(issue)} className="rounded border p-2 text-sky-700" title={t("تعديل")}><Edit3 className="h-4 w-4" /></button><button disabled={busy} onClick={() => void post(issue)} className="rounded border p-2 text-emerald-700" title={t("ترحيل")}><Send className="h-4 w-4" /></button><button disabled={busy} onClick={() => void remove(issue)} className="rounded border p-2 text-red-600" title={t("حذف")}><Trash2 className="h-4 w-4" /></button></>}{issue.status === "posted" && <button onClick={() => void printIssue(issue)} className="rounded border p-2 text-slate-700" title={t("طباعة")}><Printer className="h-4 w-4" /></button>}</div></td>
             </tr>)}</tbody>
           </table></div>
