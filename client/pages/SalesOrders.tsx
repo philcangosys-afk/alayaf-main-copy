@@ -14,7 +14,9 @@ import {
   ShoppingCart,
   Download,
   Loader2,
+  Printer,
 } from "lucide-react";
+import { openDocumentOutput, type DocumentOutputMode } from "@/lib/pdfDownload";
 import {
   cn,
   escapeHtml,
@@ -38,7 +40,7 @@ import { selectAllRows } from "@/lib/ledgerData";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
 import { useI18n } from "@/i18n";
 import { ItemLinkButton, ItemPickerDialog, StockHint } from "@/components/ItemPicker";
-import { requestedQuantity, useItemCatalog, type CatalogItem } from "@/lib/itemCatalog";
+import { hasSubHalala, requestedQuantity, salesUnitPrice, useItemCatalog, type CatalogItem } from "@/lib/itemCatalog";
 
 // بند أمر البيع كما يُحفظ في عمود items (jsonb) في قاعدة البيانات
 type OrderItem = {
@@ -98,6 +100,8 @@ type QuotationOption = {
   items: OrderItem[];
   // بعض بنود العرض بنسبة ضريبة غير 15% و0% (وُحّدت إلى 15%)
   hasOtherTax: boolean;
+  // S18: بعض بنود العرض بسعر وحدة بأكثر من خانتين (قُرّب إلى خانتين)
+  hasRoundedPrice: boolean;
 };
 
 const statusColors: Record<string, string> = {
@@ -407,6 +411,8 @@ const lineIssue = (item: LineAmounts): string | null => {
   if (price < 0) return "السعر لا يمكن أن يكون سالبًا";
   if (discount < 0) return "الخصم لا يمكن أن يكون سالبًا";
   if (discount - quantity * price > 1e-9) return "الخصم أكبر من قيمة البند (الكمية × السعر)";
+  // S18: سعر الوحدة بخانتين كما في فاتورة المبيعات التي يُحوَّل إليها الأمر
+  if (hasSubHalala(price)) return "سعر الوحدة بخانتين عشريتين على الأكثر";
   return null;
 };
 
@@ -434,6 +440,8 @@ const salesOrderErrorMessages: Array<[string, string]> = [
     "الكمية يجب أن تكون أكبر من صفر، والسعر والخصم غير سالبين، والخصم لا يتجاوز قيمة البند",
   ],
   ["SALES_ORDER_TAX_RATE_INVALID", "نسبة الضريبة يجب أن تكون 15% أو 0%"],
+  // S18: العرض المحوّل إلى فاتورة لا يُحوَّل إلى أمر بيع
+  ["SALES_ORDER_QUOTATION_INVOICED", "عرض السعر هذا محوّل إلى فاتورة مبيعات؛ لا يُنشأ له أمر بيع"],
   [
     "SALES_ORDER_ITEMS_INVALID",
     "بنود الأمر غير صالحة؛ أضف بندًا واحدًا على الأقل بكمية وسعر صحيحين",
@@ -497,11 +505,14 @@ const mapSalesOrderRow = (row: Record<string, any>): SalesOrder => {
 };
 
 // بنود عرض السعر (itemLabel/description/unitPrice) → بنود أمر البيع (description/price)
-const quotationItemsToOrderItems = (value: unknown): { items: OrderItem[]; hasOtherTax: boolean } => {
+const quotationItemsToOrderItems = (
+  value: unknown,
+): { items: OrderItem[]; hasOtherTax: boolean; hasRoundedPrice: boolean } => {
   const rows = Array.isArray(value)
     ? (value.filter((row) => row && typeof row === "object") as Record<string, unknown>[])
     : [];
   let hasOtherTax = false;
+  let hasRoundedPrice = false;
   const items = rows.map((row, index) => {
     const label = String(row.itemLabel ?? "").trim();
     const detail = String(row.description ?? "").trim();
@@ -512,18 +523,21 @@ const quotationItemsToOrderItems = (value: unknown): { items: OrderItem[]; hasOt
         : toNumber(rawTax);
     // 15% و0% تُنسخان كما في العرض؛ غيرهما يُوحَّد إلى 15% مع تنبيه
     if (tax !== SAUDI_STANDARD_VAT_RATE && tax !== 0) hasOtherTax = true;
+    const price = toNumber(row.unitPrice ?? row.price);
+    if (hasSubHalala(price)) hasRoundedPrice = true;
     return {
       id: index + 1,
       description: label && detail && label !== detail ? `${label} - ${detail}` : label || detail,
       quantity: toNumber(row.quantity),
-      price: toNumber(row.unitPrice ?? row.price),
+      // سعر الوحدة بخانتين (عرض قديم بسعر بأربع خانات يُقرَّب مع تنبيه)
+      price: salesUnitPrice(price),
       discount: toNumber(row.discount),
       taxPercent: tax === 0 ? 0 : SAUDI_STANDARD_VAT_RATE,
       // S17: صنف بند العرض ينتقل للأمر
       ...(row.productId ? { productId: String(row.productId) } : {}),
     };
   });
-  return { items, hasOtherTax };
+  return { items, hasOtherTax, hasRoundedPrice };
 };
 
 const emptyLine = (id: number): OrderItem => ({
@@ -618,12 +632,13 @@ export default function SalesOrders() {
       });
       return;
     }
-    if (items.some((item) => orderTaxRate(item.taxPercent) !== SAUDI_STANDARD_VAT_RATE)) {
-      toast({
-        title: t("تم توحيد نسبة الضريبة"),
-        description: t("فواتير المبيعات تعتمد 15%؛ بنود الأمر بنسبة 0% ستظهر في الفاتورة بنسبة 15%"),
-      });
-    }
+    // ملاحظات التحويل تُعرض في شاشة الفاتورة مع تنبيه العميل (التنبيهات واحد في كل مرة)
+    const zeroTax = items.some((item) => orderTaxRate(item.taxPercent) !== SAUDI_STANDARD_VAT_RATE);
+    const roundedPrice = items.some((item) => hasSubHalala(toNumber(item.price)));
+    const notices = [
+      zeroTax ? t("فواتير المبيعات تعتمد 15%؛ بنود الأمر بنسبة 0% ستظهر في الفاتورة بنسبة 15%") : "",
+      roundedPrice ? t("سعر الوحدة في فاتورة المبيعات بخانتين؛ راجع مبالغ البنود قبل الحفظ") : "",
+    ].filter(Boolean);
     navigate("/sales/invoices", {
       state: {
         fromSalesOrder: {
@@ -632,10 +647,12 @@ export default function SalesOrders() {
           customer: order.customer,
           // S17: مستودع الأمر وأصنافه: المنتجات المخزنية تُصرف منه مع الفاتورة
           warehouseId: order.warehouseId,
+          notices,
           items: items.map((item) => ({
             description: String(item.description ?? ""),
             quantity: toNumber(item.quantity),
-            unitPrice: toNumber(item.price),
+            // سعر الوحدة في الفاتورة بخانتين
+            unitPrice: salesUnitPrice(toNumber(item.price)),
             discount: toNumber(item.discount),
             // الفواتير تقبل 15% فقط
             taxPercent: SAUDI_STANDARD_VAT_RATE,
@@ -646,8 +663,9 @@ export default function SalesOrders() {
     });
   };
 
-  const handleDownloadPdf = async (order: SalesOrder) => {
-    const printWindow = window.open("", "_blank");
+  // S18: «PDF» يُحمَّل ملفًا مباشرة، و«طباعة» تفتح نافذة الطباعة (المستند نفسه)
+  const handleDownloadPdf = async (order: SalesOrder, mode: DocumentOutputMode = "download") => {
+    const printWindow = openDocumentOutput(mode, order.id);
     if (!printWindow) {
       return;
     }
@@ -704,7 +722,7 @@ export default function SalesOrders() {
           <td>${formatNumber(index + 1)}</td>
           <td class="desc">${escapeHtml(item.description || "-")}</td>
           <td>${formatNumber(item.quantity)}</td>
-          <td>${money(item.price)}</td>
+          <td>${formatNumber(Number(item.price) || 0, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
           <td>${money(item.discount)}</td>
           <td>${money(line.net)}</td>
           <td>${formatNumber(item.taxPercent)}%</td>
@@ -834,7 +852,8 @@ export default function SalesOrders() {
             }}
             onDelete={handleDelete}
             onConvert={handleConvertToInvoice}
-            onDownloadPdf={handleDownloadPdf}
+            onDownloadPdf={(order) => void handleDownloadPdf(order, "download")}
+            onPrintOrder={(order) => void handleDownloadPdf(order, "print")}
             orders={orders}
           />
         )}
@@ -865,6 +884,7 @@ function OrdersList({
   onDelete,
   onConvert,
   onDownloadPdf,
+  onPrintOrder,
   orders,
 }: {
   onCreateClick: () => void;
@@ -873,6 +893,7 @@ function OrdersList({
   onDelete: (order: SalesOrder) => void;
   onConvert: (order: SalesOrder) => void;
   onDownloadPdf: (order: SalesOrder) => void;
+  onPrintOrder: (order: SalesOrder) => void;
   orders: SalesOrder[];
 }) {
   const { t, direction, formatDate, formatNumber } = useSalesOrdersI18n();
@@ -936,6 +957,7 @@ function OrdersList({
                     <ActionBtn icon={Edit} label={t("تعديل")} color="emerald" onClick={() => onEdit(order)} />
                   )}
                   <ActionBtn icon={Download} label="PDF" color="slate" onClick={() => void onDownloadPdf(order)} />
+                  <ActionBtn icon={Printer} label={t("طباعة")} color="slate" onClick={() => onPrintOrder(order)} />
                   {canConvertToInvoice(order) && (
                     <ActionBtn icon={FileText} label={t("تحويل إلى فاتورة")} color="indigo" onClick={() => onConvert(order)} />
                   )}
@@ -1215,6 +1237,7 @@ function useOrderReferenceData(t: (value: string) => string) {
               status: String(row.status ?? ""),
               items: mapped.items,
               hasOtherTax: mapped.hasOtherTax,
+              hasRoundedPrice: mapped.hasRoundedPrice,
             };
           })
           .filter((row) => row.id),
@@ -1447,7 +1470,9 @@ function OrderEditor({
               ...item,
               productId: product.id,
               description: product.nameAr,
-              price: product.salePrice > 0 ? product.salePrice : item.price,
+              price: product.salePrice > 0 ? salesUnitPrice(product.salePrice) : item.price,
+              // S18: نسبة البند من الصنف المختار: 0% للصنف بنسبة 0%، وإلا 15% (أوامر البيع تقبل 15% أو 0%)
+              taxPercent: product.vatRate === 0 ? 0 : SAUDI_STANDARD_VAT_RATE,
             }
           : item,
       ),
@@ -1483,28 +1508,41 @@ function OrderEditor({
       return;
     }
     setQuotationId(quotation.id);
+    // تنبيه واحد (التنبيهات واحد في كل مرة): العميل غير الموجود أولًا، ثم العرض بلا بنود، ومعه ملاحظات التحويل
+    const notes = [
+      quotation.hasOtherTax ? t("بعض بنود عرض السعر بنسبة ضريبة مختلفة؛ أوامر البيع تعتمد 15%") : "",
+      quotation.hasRoundedPrice ? t("سعر الوحدة في أمر البيع بخانتين؛ راجع مبالغ البنود قبل الحفظ") : "",
+    ].filter(Boolean);
     const match = customers.find((row) => row.name === quotation.customer);
+    const customerMissing = !match && Boolean(quotation.customer);
     if (match) {
       setCustomerId(match.id);
       setCustomer(match.name);
     } else if (quotation.customer) {
       setCustomerId("");
       setCustomer(quotation.customer);
-      toast({
-        title: t("عميل عرض السعر غير موجود في قائمة العملاء النشطين"),
-        description: `${quotation.customer} — ${t("اختر العميل من القائمة")}`,
-        variant: "destructive",
-      });
     }
     if (quotation.items.length > 0) {
       setItems(quotation.items.map((line, index) => ({ ...line, id: index + 1 })));
-    } else {
-      toast({ title: t("عرض السعر بلا بنود"), description: t("أدخل بنود الأمر يدويًا") });
     }
-    if (quotation.hasOtherTax) {
+    if (customerMissing) {
       toast({
-        title: t("تم توحيد نسبة الضريبة"),
-        description: t("بعض بنود عرض السعر بنسبة ضريبة مختلفة؛ أوامر البيع تعتمد 15%"),
+        title: t("عميل عرض السعر غير موجود في قائمة العملاء النشطين"),
+        description: [
+          `${quotation.customer} — ${t("اختر العميل من القائمة")}`,
+          quotation.items.length === 0 ? `${t("عرض السعر بلا بنود")}: ${t("أدخل بنود الأمر يدويًا")}` : "",
+          ...notes,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        variant: "destructive",
+      });
+    } else if (quotation.items.length === 0) {
+      toast({ title: t("عرض السعر بلا بنود"), description: [t("أدخل بنود الأمر يدويًا"), ...notes].join(" ") });
+    } else if (notes.length > 0) {
+      toast({
+        title: t(quotation.hasOtherTax ? "تم توحيد نسبة الضريبة" : "قُرّب سعر الوحدة إلى خانتين"),
+        description: notes.join(" "),
       });
     }
   };
@@ -1909,7 +1947,7 @@ function OrderEditor({
                   const lineTotal = calcLine(item).total;
                   const issue = lineIssue(item);
                   const quantityInvalid = !(toNumber(item.quantity) > 0);
-                  const priceInvalid = toNumber(item.price) < 0;
+                  const priceInvalid = toNumber(item.price) < 0 || hasSubHalala(toNumber(item.price));
                   const discountInvalid =
                     toNumber(item.discount) < 0 ||
                     toNumber(item.discount) - toNumber(item.quantity) * toNumber(item.price) > 1e-9;

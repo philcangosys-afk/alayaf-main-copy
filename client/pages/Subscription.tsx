@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { supabase } from "@/lib/supabaseClient";
 import { useCompany } from "@/lib/companyContext";
+import { ALL_COMPANY_MODULES, COMPANY_MODULE_LABELS } from "@/lib/companyModules";
 import {
   INVOICE_STATUS_LABELS,
   PAYMENT_METHOD_LABELS,
@@ -129,6 +130,14 @@ function PlanCard({
         {t("غير شامل ضريبة القيمة المضافة")}
         {cycle === "yearly" && saving > 0 ? `، ${t("وتوفّر")} ${saving.toLocaleString("en-US")} ${t("ر.س")}` : ""}
       </p>
+      {/* S19: أقسام الباقة */}
+      <div className="mt-4 flex flex-wrap gap-1.5">
+        {ALL_COMPANY_MODULES.filter((module) => (plan.modules ?? []).includes(module)).map((module) => (
+          <span key={module} className="rounded-full border border-primary/20 bg-primary/5 px-2.5 py-0.5 text-[11.5px] font-bold text-primary">
+            {t(COMPANY_MODULE_LABELS[module])}
+          </span>
+        ))}
+      </div>
       <ul className="mt-4 space-y-2 border-t border-border/50 pt-4 text-[13px]">
         {limits.map(({ icon: Icon, text }) => (
           <li key={text} className="flex items-center gap-2 font-semibold text-foreground">

@@ -22,6 +22,9 @@ export type CatalogItem = {
   /** null: سعر الشراء غير ظاهر لهذا المستخدم */
   purchasePrice: number | null;
   reorderLevel: number;
+  /** S18: نسبة ضريبة الصنف، وطريقة إدخال سعره في بطاقة الصنف (الأسعار هنا قبل الضريبة دائمًا) */
+  vatRate: number;
+  pricesIncludeVat: boolean;
   revenueAccountCode: string;
   purchaseAccountCode: string;
   /** مجموع الكمية في كل المستودعات (للمنتج فقط) */
@@ -66,6 +69,8 @@ export function parseCatalog(raw: unknown): Pick<ItemCatalog, "items" | "warehou
         salePrice: toNumber(row.sale_price),
         purchasePrice: row.purchase_price === null || row.purchase_price === undefined ? null : toNumber(row.purchase_price),
         reorderLevel: toNumber(row.reorder_level),
+        vatRate: row.vat_rate === null || row.vat_rate === undefined || row.vat_rate === "" ? 15 : toNumber(row.vat_rate),
+        pricesIncludeVat: row.prices_include_vat === true,
         revenueAccountCode: String(row.revenue_account_code ?? ""),
         purchaseAccountCode: String(row.purchase_account_code ?? ""),
         quantity: toNumber(row.quantity),
@@ -133,6 +138,137 @@ export function itemMatches(item: CatalogItem, query: string): boolean {
   if (!needle) return true;
   return [item.nameAr, item.nameEn, item.sku, item.barcode, item.description]
     .some((part) => part.toLowerCase().includes(needle));
+}
+
+/**
+ * S18: سعر الوحدة في مستندات المبيعات (العرض والأمر والفاتورة) بخانتين: نموذج حساب الفاتورة وقيدها والهيئة
+ * (سعر الوحدة × الكمية، وتقريب البند) لا يحتمل أسعارًا بأربع خانات في أكثر من بند. سعر الصنف نفسه بأربع خانات.
+ */
+/*
+ * S18: حساب عشري دقيق كما تحسبه القاعدة (numeric) من الرقم كما يُرسل في JSON (أقصر نص له)، بلا أخطاء الفاصلة
+ * العائمة (مثل 595.5 × 16790.51 = 9998748.705 تقريبه في القاعدة …71 وبالفاصلة العائمة …70).
+ */
+type Decimal = { units: bigint; scale: number };
+const BIG_ZERO = BigInt(0);
+const BIG_ONE = BigInt(1);
+const BIG_TWO = BigInt(2);
+const BIG_TEN = BigInt(10);
+const pow10 = (exponent: number) => BIG_TEN ** BigInt(exponent);
+
+function toDecimal(value: unknown): Decimal {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return { units: BIG_ZERO, scale: 0 };
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i.exec(String(number));
+  if (!match) return { units: BIG_ZERO, scale: 0 };
+  const fraction = match[3] ?? "";
+  let digits = match[2] + fraction;
+  let scale = fraction.length - Number(match[4] ?? 0);
+  if (scale < 0) {
+    digits += "0".repeat(-scale);
+    scale = 0;
+  }
+  const units = BigInt(digits);
+  return { units: match[1] ? -units : units, scale };
+}
+
+const atScale = (value: Decimal, scale: number) => value.units * pow10(scale - value.scale);
+const addDecimals = (a: Decimal, b: Decimal): Decimal => {
+  const scale = Math.max(a.scale, b.scale);
+  return { units: atScale(a, scale) + atScale(b, scale), scale };
+};
+const subtractDecimals = (a: Decimal, b: Decimal): Decimal => addDecimals(a, { units: -b.units, scale: b.scale });
+const multiplyDecimals = (a: Decimal, b: Decimal): Decimal => ({ units: a.units * b.units, scale: a.scale + b.scale });
+const percentOf = (a: Decimal, rate: Decimal): Decimal => {
+  const product = multiplyDecimals(a, rate);
+  return { units: product.units, scale: product.scale + 2 };
+};
+
+/** round(x, 2) في القاعدة (النصف بعيدًا عن الصفر)، بالهللات */
+function toHalalas(value: Decimal): bigint {
+  if (value.scale <= 2) return atScale(value, 2);
+  const divisor = pow10(value.scale - 2);
+  const negative = value.units < BIG_ZERO;
+  const magnitude = negative ? -value.units : value.units;
+  let quotient = magnitude / divisor;
+  if ((magnitude % divisor) * BIG_TWO >= divisor) quotient += BIG_ONE;
+  return negative ? -quotient : quotient;
+}
+
+const halalasToNumber = (halalas: bigint) => Number(halalas) / 100;
+const decimalToNumber = (value: Decimal) => Number(`${value.units}e-${value.scale}`);
+const isWholeHalalas = (value: Decimal) => value.scale <= 2 || value.units % pow10(value.scale - 2) === BIG_ZERO;
+const absoluteDifference = (a: Decimal, b: Decimal) => {
+  const difference = subtractDecimals(a, b);
+  return { units: difference.units < BIG_ZERO ? -difference.units : difference.units, scale: difference.scale };
+};
+const atLeastOneHalala = (value: Decimal) => atScale(value, Math.max(value.scale, 2)) >= pow10(Math.max(value.scale, 2) - 2);
+
+/** المبلغ مقرّبًا إلى هللة بتقريب القاعدة (2.175 → 2.18) */
+export const roundHalala = (value: number) => halalasToNumber(toHalalas(toDecimal(value)));
+
+export const salesUnitPrice = (value: number) => roundHalala(value);
+
+/** S18: مبلغ بأكثر من خانتين عشريتين (سعر الوحدة في مستندات المبيعات بخانتين؛ بهامش الفاصلة العائمة 0.1 + 0.2) */
+export const hasSubHalala = (value: number) => {
+  const cents = (Number(value) || 0) * 100;
+  return Math.abs(cents - Math.round(cents)) > 1e-6;
+};
+
+/** مبلغ بند المبيعات (الكمية × السعر − الخصم) مقرّبًا إلى هللة كما يقرّبه قيد الفاتورة (ولا يقل عن صفر) */
+export function salesLineAmount(quantity: number, price: number, discount: number): number {
+  const amount = subtractDecimals(multiplyDecimals(toDecimal(quantity), toDecimal(price)), toDecimal(discount));
+  return amount.units < BIG_ZERO ? 0 : halalasToNumber(toHalalas(amount));
+}
+
+/**
+ * S18: مجاميع فاتورة المبيعات كما يرحّلها القيد: القيد يقرّب مبلغ كل بند (الكمية × السعر − الخصم) إلى هللة ويقابل
+ * مجموعها بالمجموع الفرعي المحفوظ، فالمجموع الفرعي = مجموع البنود المقرّبة (القيد متوازن دائمًا). الضريبة = مجموع
+ * ضريبة البنود الدقيق مقرّبًا (كما يتحقق منه الخادم)، والإجمالي مجموعهما. الحساب عشري دقيق كالقاعدة.
+ * issue: حين يبتعد المجموع الفرعي أو الإجمالي عن المجموع الدقيق للبنود هللة أو أكثر (كمية بكسور أو خصم بأكثر من
+ * خانتين في أكثر من بند) يرفضه تحقق الفاتورة والهيئة (فرق 0.01): يُعاد أول بند مبلغه بكسور الهللة. بند واحد لا يُرفض.
+ */
+export function salesInvoiceAmounts<T extends { quantity: number; discount: number; taxPercent: number }>(
+  lines: T[],
+  priceOf: (line: T) => number,
+): {
+  subtotal: number;
+  tax: number;
+  total: number;
+  exactSubtotal: number;
+  issue: { line: T | null; amount: number } | null;
+} {
+  let exactSubtotal: Decimal = { units: BIG_ZERO, scale: 0 };
+  let exactTax: Decimal = { units: BIG_ZERO, scale: 0 };
+  let subtotalHalalas = BIG_ZERO;
+  let first: T | null = null;
+  let firstAmount = 0;
+  for (const line of lines) {
+    const amount = subtractDecimals(
+      multiplyDecimals(toDecimal(line.quantity), toDecimal(priceOf(line))),
+      toDecimal(line.discount),
+    );
+    const rate = toDecimal(line.taxPercent);
+    exactSubtotal = addDecimals(exactSubtotal, amount);
+    exactTax = addDecimals(exactTax, percentOf(amount, rate));
+    subtotalHalalas += amount.units < BIG_ZERO ? BIG_ZERO : toHalalas(amount);
+    if (!first && !isWholeHalalas(amount)) {
+      first = line;
+      firstAmount = decimalToNumber(amount);
+    }
+  }
+  const taxHalalas = toHalalas(exactTax);
+  const subtotal: Decimal = { units: subtotalHalalas, scale: 2 };
+  const total: Decimal = { units: subtotalHalalas + taxHalalas, scale: 2 };
+  const off =
+    atLeastOneHalala(absoluteDifference(subtotal, exactSubtotal)) ||
+    atLeastOneHalala(absoluteDifference(total, addDecimals(exactSubtotal, exactTax)));
+  return {
+    subtotal: halalasToNumber(subtotalHalalas),
+    tax: halalasToNumber(taxHalalas),
+    total: halalasToNumber(subtotalHalalas + taxHalalas),
+    exactSubtotal: decimalToNumber(exactSubtotal),
+    issue: off ? { line: first, amount: firstAmount } : null,
+  };
 }
 
 /** الكميات بأربع خانات كما في القاعدة، فلا يُحسب فرق فاصلة عائمة (0.1 + 0.2) نقصًا أو زيادة */

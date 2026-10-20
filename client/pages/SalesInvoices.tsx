@@ -43,8 +43,13 @@ import PartyRegistrationDialog from "@/components/PartyRegistrationDialog";
 import { ItemLinkButton, ItemPickerDialog, StockHint } from "@/components/ItemPicker";
 import {
   deliveredQuantity,
+  hasSubHalala,
+  roundHalala,
+  salesInvoiceAmounts,
+  salesLineAmount,
   requestedQuantity,
   roundQuantity,
+  salesUnitPrice,
   stockIn,
   useItemCatalog,
   useUninvoicedDeliveries,
@@ -52,6 +57,7 @@ import {
   type PriorDelivery,
 } from "@/lib/itemCatalog";
 import { useI18n } from "@/i18n";
+import { openDocumentOutput, type DocumentOutputMode } from "@/lib/pdfDownload";
 import { COMPANY_PROFILE, isSaudiCompany, zatcaDeviceSerialKey } from "@/lib/companyProfile";
 import { checkPerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
@@ -176,6 +182,11 @@ const salesInvoiceErrorMessages: Array<[string, string]> = [
   ["SALES_INVOICE_DELIVERY_INVALID", "أحد إشعارات التسليم المختارة رُبط بفاتورة أخرى أو تغيّر؛ أعد اختيار العميل واختر الإشعارات من جديد"],
   ["SALES_INVOICE_DELIVERY_NOT_COVERED", "الفاتورة يجب أن تشمل كل أصناف إشعارات التسليم المختارة بكمية لا تقل عن المسلَّم"],
   ["SALES_INVOICE_STOCK_QUANTITY_INVALID", "كمية المنتج المخزني في الفاتورة 0.0001 فأكثر"],
+  // S18: تحويل عرض السعر
+  ["SALES_INVOICE_QUOTATION_PERMISSION_REQUIRED", "تحويل عرض السعر يتطلب صلاحية عروض الأسعار؛ لم تُحفظ الفاتورة"],
+  ["SALES_INVOICE_QUOTATION_INVALID", "عرض السعر أُغلق أو حُوّل إلى أمر بيع أو فاتورة أخرى؛ لم تُحفظ الفاتورة. أنشئها دون الربط بالعرض إن لزم"],
+  ["sales_invoices_quotation_uidx", "عرض السعر هذا محوّل إلى فاتورة مسبقًا؛ لم تُحفظ الفاتورة"],
+  ["sales_invoices_quotation_fkey", "عرض السعر غير موجود؛ لم تُحفظ الفاتورة"],
   ["ACCOUNTING_FISCAL_PERIOD_REQUIRED", "لا توجد فترة محاسبية لتاريخ اليوم"],
 ];
 // نتيجة zatca_resend_state: متى تجوز إعادة الإرسال
@@ -601,7 +612,9 @@ export default function SalesInvoices() {
   const location = useLocation();
   const [view, setView] = useState<
     "list" | "create" | "details" | "edit" | "payment"
-  >(() => (readSalesOrderInvoiceSource(location.state) ? "create" : "list"));
+  >(() =>
+    readSalesOrderInvoiceSource(location.state) || readQuotationInvoiceSource(location.state) ? "create" : "list",
+  );
   const [invoices, setInvoices] = useState<Invoice[]>(initialInvoices);
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const { permissions } = useRolePermissions();
@@ -819,11 +832,13 @@ export default function SalesInvoices() {
     }
   };
 
+  // S18: «تحميل» ملف PDF مباشرة إلى الجهاز، و«طباعة» نافذة الطباعة (المستند نفسه)
   const handleDownloadPdf = async (
     invoice: Invoice,
     targetWindow?: Window | null,
+    mode: DocumentOutputMode = "download",
   ) => {
-    const printWindow = targetWindow ?? window.open("", "_blank");
+    const printWindow = targetWindow ?? openDocumentOutput(mode, invoice.id);
     if (!printWindow) return;
 
     const escapeHtml = (value: string) =>
@@ -856,8 +871,10 @@ export default function SalesInvoices() {
       const price = Number(item.unitPrice) || 0;
       const discount = Number(item.discount) || 0;
       const taxPercent = Number(item.taxPercent) || 0;
-      const taxable = qty * price - discount;
-      const vat = (taxable * taxPercent) / 100;
+      // S18: مبلغ البند مقرّبًا إلى هللة كما في القيد والمجموع المحفوظ؛ الضريبة من المبلغ الدقيق
+      const exactTaxable = qty * price - discount;
+      const taxable = salesLineAmount(qty, price, discount);
+      const vat = (exactTaxable * taxPercent) / 100;
       const total = taxable + vat;
       return {
         idx: idx + 1,
@@ -872,15 +889,16 @@ export default function SalesInvoices() {
       };
     });
 
-    const totals = rows.reduce(
-      (acc, row) => {
-        acc.taxable += row.taxable;
-        acc.vat += row.vat;
-        acc.total += row.total;
-        return acc;
-      },
-      { taxable: 0, vat: 0, total: 0 },
-    );
+    // المجاميع كما تُحفظ وتُرحَّل (مجموع البنود المقرّبة، والضريبة مقرّبة)؛ الفاتورة القديمة بلا بنود: إجماليها المحفوظ
+    const printed = salesInvoiceAmounts(lineItems, (item) => Number(item.unitPrice) || 0);
+    const totals =
+      parsedItems.length > 0
+        ? { taxable: printed.subtotal, vat: printed.tax, total: printed.total }
+        : {
+            taxable: rows[0].taxable,
+            vat: roundHalala(fallbackTotal - rows[0].taxable),
+            total: fallbackTotal,
+          };
 
     const rowsHtml = rows
       .map(
@@ -889,7 +907,7 @@ export default function SalesInvoices() {
             <td>${formatNumber(row.idx)}</td>
             <td>${escapeHtml(row.description)}</td>
             <td>${formatNumber(row.qty)}</td>
-            <td>${formatNumber(row.price, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>${formatNumber(row.price, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
             <td>${formatNumber(row.discount, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
             <td>${formatNumber(row.taxable, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
             <td>${formatNumber(row.vat, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}<div class="vat-rate">${formatNumber(row.taxPercent)}%</div></td>
@@ -1087,7 +1105,8 @@ export default function SalesInvoices() {
             }}
             onPostAccounting={handlePostAccounting}
             onDelete={handleDelete}
-            onDownloadPdf={handleDownloadPdf}
+            onDownloadPdf={(invoice) => void handleDownloadPdf(invoice, null, "download")}
+            onPrintInvoice={(invoice) => void handleDownloadPdf(invoice, null, "print")}
             onResendZatca={handleResendZatca}
             invoices={invoices}
             canViewIssuer={canViewIssuer}
@@ -1097,7 +1116,7 @@ export default function SalesInvoices() {
           <InvoiceForm
             onBack={() => setView("list")}
             onSaved={handleSaved}
-            onPrint={handleDownloadPdf}
+            onPrint={(invoice, targetWindow) => handleDownloadPdf(invoice, targetWindow, "print")}
           />
         )}
         {view === "details" && selectedInvoice && (
@@ -1133,6 +1152,7 @@ function InvoicesList({
   onPostAccounting,
   onDelete,
   onDownloadPdf,
+  onPrintInvoice,
   onResendZatca,
   invoices,
   canViewIssuer,
@@ -1144,6 +1164,7 @@ function InvoicesList({
   onPostAccounting: (invoice: Invoice) => void;
   onDelete: (invoiceId: string) => void;
   onDownloadPdf: (invoice: Invoice) => void;
+  onPrintInvoice: (invoice: Invoice) => void;
   onResendZatca: (invoice: Invoice) => void;
   invoices: Invoice[];
   canViewIssuer: boolean;
@@ -1234,12 +1255,15 @@ function InvoicesList({
                     onEdit(invoice);
                   }}
                 />
-                <ActionBtn
-                  icon={CreditCard}
-                  label={t("تسديد")}
-                  color="indigo"
-                  onClick={() => onPayment(invoice)}
-                />
+                {/* الفاتورة المسددة بالكامل لا تُسدَّد مرة أخرى */}
+                {parseCurrency(invoice.remaining) > 0.005 && (
+                  <ActionBtn
+                    icon={CreditCard}
+                    label={t("تسديد")}
+                    color="indigo"
+                    onClick={() => onPayment(invoice)}
+                  />
+                )}
                 {invoice.accountingStatus !== "posted" && (
                   <ActionBtn
                     icon={FileText}
@@ -1269,6 +1293,12 @@ function InvoicesList({
                       `${t("الفاتورة")}: ${invoice.id}`,
                     );
                   }}
+                />
+                <ActionBtn
+                  icon={Printer}
+                  label={t("طباعة")}
+                  color="slate"
+                  onClick={() => onPrintInvoice(invoice)}
                 />
                 {invoice.accountingStatus === "posted" &&
                   ZATCA_RESENDABLE_STATUSES.has(
@@ -1396,6 +1426,8 @@ function InvoiceDetails({
       const mapped = parsed.map((item, index) => {
         const lineSubtotal = item.quantity * item.unitPrice - item.discount;
         const vat = (lineSubtotal * item.taxPercent) / 100;
+        // S18: مبلغ البند مقرّبًا إلى هللة كما في القيد والطباعة
+        const taxable = salesLineAmount(item.quantity, item.unitPrice, item.discount);
         return {
           id: index + 1,
           description: item.description || "-",
@@ -1403,9 +1435,9 @@ function InvoiceDetails({
           price: item.unitPrice,
           discount: item.discount,
           taxPercent: item.taxPercent,
-          taxable: lineSubtotal,
+          taxable,
           vat,
-          total: lineSubtotal + vat,
+          total: taxable + vat,
         };
       });
       setLineItems(mapped);
@@ -1429,7 +1461,8 @@ function InvoiceDetails({
     }
   }, [invoice.id, invoice.total, invoice.originalTotal, invoice.items]);
 
-  const totals = lineItems.reduce(
+  // S18: المجاميع كما تُحفظ وتُرحَّل وتُطبع (مجموع البنود المقرّبة إلى هللة، والضريبة مقرّبة)
+  const summed = lineItems.reduce(
     (acc, item) => {
       acc.taxable += item.taxable;
       acc.vat += item.vat;
@@ -1438,6 +1471,14 @@ function InvoiceDetails({
     },
     { taxable: 0, vat: 0, total: 0 },
   );
+  const savedAmounts = salesInvoiceAmounts(
+    lineItems.map((item) => ({ quantity: item.qty, unitPrice: item.price, discount: item.discount, taxPercent: item.taxPercent })),
+    (item) => item.unitPrice,
+  );
+  const totals =
+    getInvoiceLines(invoice).length > 0
+      ? { taxable: savedAmounts.subtotal, vat: savedAmounts.tax, total: savedAmounts.total }
+      : summed;
 
   return (
     <div dir={direction} className="space-y-6 pb-12">
@@ -1649,7 +1690,7 @@ function InvoiceDetails({
                       <td className="px-3 py-2 border border-slate-200">
                         {formatNumber(item.price, {
                           minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
+                          maximumFractionDigits: 4,
                         })}
                       </td>
                       <td className="px-3 py-2 border border-slate-200">
@@ -1905,6 +1946,8 @@ function InvoiceEdit({
     },
     { subtotal: 0, discount: 0, tax: 0, total: 0 },
   );
+  // S18: المجاميع كما تُحفظ وتُرحَّل (مبلغ كل بند مقرّبًا إلى هللة)
+  const amounts = salesInvoiceAmounts(items, (item: (typeof items)[number]) => Number(item.unitPrice));
 
   const editInFlight = useRef(false);
   const handleSave = async () => {
@@ -1919,12 +1962,30 @@ function InvoiceEdit({
           Number(item.quantity) * Number(item.unitPrice) ||
         Number(item.taxPercent) !== SAUDI_STANDARD_VAT_RATE,
     );
-    if (invalidLine || !(totals.total > 0)) {
+    if (invalidLine || !(amounts.total > 0)) {
       toast({
         title: t("بنود الفاتورة غير مكتملة"),
         description: t(
           "كل بند يحتاج وصفًا وكمية وسعرًا أكبر من صفر، والخصم لا يتجاوز قيمة البند",
         ),
+        variant: "destructive",
+      });
+      return;
+    }
+    // S18: الشروط نفسها عند الإنشاء: سعر الوحدة بخانتين، ومبالغ البنود تطابق المجموع بعد التقريب
+    const fractionalPrice = items.find((item: (typeof items)[number]) => hasSubHalala(Number(item.unitPrice)));
+    if (fractionalPrice) {
+      toast({
+        title: t("سعر الوحدة بخانتين عشريتين على الأكثر"),
+        description: `${fractionalPrice.description || "-"}: ${fractionalPrice.unitPrice} — ${t("قرّبه إلى")} ${salesUnitPrice(Number(fractionalPrice.unitPrice))}`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (amounts.issue) {
+      toast({
+        title: t("مبالغ البنود لا تطابق المجموع بعد التقريب"),
+        description: roundingIssueText(amounts, t),
         variant: "destructive",
       });
       return;
@@ -1939,7 +2000,10 @@ function InvoiceEdit({
     }
     editInFlight.current = true;
     const paidValue = parseCurrency(invoice.paid);
-    const totalValue = totals.total;
+    // المجاميع كما يرحّلها القيد (مبلغ كل بند مقرّبًا إلى هللة)
+    const subtotalValue = amounts.subtotal;
+    const taxValue = amounts.tax;
+    const totalValue = amounts.total;
     const remainingValue = Math.max(totalValue - paidValue, 0);
 
     const { data, error } = await supabase
@@ -1950,8 +2014,8 @@ function InvoiceEdit({
         customer,
         customer_address: customerAddress,
         items,
-        subtotal: totals.subtotal,
-        total_tax: totals.tax,
+        subtotal: subtotalValue,
+        total_tax: taxValue,
         total: `ريال ${totalValue.toFixed(2)}`,
         remaining: `ريال ${remainingValue.toFixed(2)}`,
         status,
@@ -2249,7 +2313,7 @@ function InvoiceEdit({
                 <div className="space-y-2 text-end">
                   <div className="text-sm">
                     <span className="text-sm font-bold text-foreground">
-                      {formatNumber(totals.tax, {
+                      {formatNumber(amounts.tax, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}{" "}
@@ -2258,7 +2322,7 @@ function InvoiceEdit({
                   </div>
                   <div className="text-sm">
                     <span className="font-bold text-emerald-600">
-                      {formatNumber(totals.total, {
+                      {formatNumber(amounts.total, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}{" "}
@@ -2275,7 +2339,7 @@ function InvoiceEdit({
                 <div className="space-y-2 text-end">
                   <div className="text-sm">
                     <span className="text-sm font-bold text-foreground">
-                      {formatNumber(totals.subtotal, {
+                      {formatNumber(amounts.subtotal, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}{" "}
@@ -2464,13 +2528,18 @@ function InvoicePayment({
         </div>
         <button
           onClick={handleSave}
-          disabled={savingPayment}
+          disabled={savingPayment || remainingValue <= 0.005}
           className="px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded hover:bg-indigo-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {savingPayment && <Loader2 className="inline h-4 w-4 animate-spin me-1" />}
           {t("حفظ السداد")}
         </button>
       </div>
+      {remainingValue <= 0.005 && (
+        <div className="mx-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-start text-sm font-semibold text-emerald-800">
+          {t("الفاتورة مسددة بالكامل؛ لا يوجد مبلغ متبقٍ")}
+        </div>
+      )}
 
       <div className="p-4">
         <div className="rounded-2xl bg-white border border-border/50 shadow-sm overflow-hidden animate-fade-in-up">
@@ -2571,6 +2640,8 @@ type SalesOrderInvoiceSource = {
   customer: string;
   // S17: مستودع الأمر وأصناف بنوده (اختياريان)
   warehouseId: string;
+  // S18: ملاحظات التحويل (توحيد الضريبة، تقريب السعر) تُعرض في النموذج
+  notices: string[];
   items: Array<{
     description: string;
     quantity: number;
@@ -2602,9 +2673,69 @@ const readSalesOrderInvoiceSource = (
     customerId: String(source.customerId ?? ""),
     customer: String(source.customer ?? ""),
     warehouseId: String(source.warehouseId ?? ""),
+    notices: readNotices(source.notices),
     items,
   };
 };
+
+const readNotices = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map((notice) => String(notice ?? "").trim()).filter(Boolean) : [];
+
+// S18: تحويل عرض سعر إلى فاتورة: بيانات العرض كما ترسلها شاشة عروض الأسعار في حالة التنقل
+type QuotationInvoiceSource = {
+  id: string;
+  customer: string;
+  customerVat: string;
+  customerAddress: string;
+  notices: string[];
+  items: Array<{
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    discount: number;
+    productId?: string;
+  }>;
+};
+
+const readQuotationInvoiceSource = (state: unknown): QuotationInvoiceSource | null => {
+  const source = (state as { fromQuotation?: Record<string, unknown> } | null)?.fromQuotation;
+  if (!source || typeof source !== "object" || !source.id) return null;
+  const items = Array.isArray(source.items)
+    ? (source.items as Record<string, unknown>[])
+        .filter((item) => item && typeof item === "object")
+        .map((item) => ({
+          description: String(item.description ?? ""),
+          quantity: Number(item.quantity) || 0,
+          unitPrice: Number(item.unitPrice) || 0,
+          discount: Number(item.discount) || 0,
+          productId: item.productId ? String(item.productId) : undefined,
+        }))
+    : [];
+  return {
+    id: String(source.id),
+    customer: String(source.customer ?? ""),
+    customerVat: String(source.customerVat ?? ""),
+    customerAddress: String(source.customerAddress ?? ""),
+    notices: readNotices(source.notices),
+    items,
+  };
+};
+
+/** S18: نص تنبيه البنود التي لا تطابق المجموع بعد التقريب */
+function roundingIssueText(
+  amounts: {
+    subtotal: number;
+    exactSubtotal: number;
+    issue: { line: { description?: string; quantity: number; unitPrice: number; discount: number } | null; amount: number } | null;
+  },
+  t: (value: string) => string,
+): string {
+  const line = amounts.issue?.line;
+  const lineText = line
+    ? `${line.description || "-"}: ${line.quantity} × ${line.unitPrice}${Number(line.discount) ? ` − ${line.discount}` : ""} = ${Number((amounts.issue?.amount ?? 0).toFixed(6))}. `
+    : "";
+  return `${lineText}${t("مجموع البنود مقرّبة")} ${amounts.subtotal.toFixed(2)}، ${t("والمجموع")} ${Number(amounts.exactSubtotal.toFixed(6))}. ${t("عدّل الكمية أو الخصم ليكون مبلغ كل بند بالهللات (خانتين)")}`;
+}
 
 function InvoiceForm({
   onBack,
@@ -2703,7 +2834,16 @@ function InvoiceForm({
   const [pendingOrderCustomer, setPendingOrderCustomer] = useState<{
     id: string;
     name: string;
+    // S18: عميل عرض السعر: بلا معرّف، يُطابق بالرقم الضريبي ثم الاسم، وإلا يُكتب كما في العرض
+    vat?: string;
+    address?: string;
+    fromQuotation?: boolean;
   } | null>(null);
+  // S18: عرض السعر المحوّل: يُغلق ويُربط بالفاتورة عند حفظها (في القاعدة، في المعاملة نفسها)
+  const quotationSourceRef = useRef<QuotationInvoiceSource | null>(readQuotationInvoiceSource(location.state));
+  const [linkedQuotationId, setLinkedQuotationId] = useState("");
+  // S18: ملاحظات تحويل العرض أو الأمر: ثابتة في النموذج (التنبيه المنبثق يحل محله تنبيه العميل)
+  const [conversionNotices, setConversionNotices] = useState<string[]>([]);
 
   useEffect(() => {
     const loadDefaults = async () => {
@@ -2849,6 +2989,7 @@ function InvoiceForm({
         return;
       }
       linkedSalesOrderIdRef.current = source.id;
+      setConversionNotices(source.notices);
       linkedSalesOrderCustomerRef.current = {
         id: source.customerId,
         name: source.customer,
@@ -2861,7 +3002,8 @@ function InvoiceForm({
             // حساب الإيراد الافتراضي نفسه الذي يستخدمه النموذج لبنوده
             accountCode: current[0]?.accountCode ?? "411",
             quantity: line.quantity,
-            unitPrice: line.unitPrice,
+            // سعر الوحدة في الفاتورة بخانتين
+            unitPrice: salesUnitPrice(line.unitPrice),
             discount: line.discount,
             taxPercent: SAUDI_STANDARD_VAT_RATE,
             productId: line.productId,
@@ -2878,18 +3020,69 @@ function InvoiceForm({
     };
   }, []);
 
+  // S18: تعبئة النموذج من عرض السعر: البنود فورًا، والعميل بعد تحميل العملاء
+  useEffect(() => {
+    const source = quotationSourceRef.current;
+    if (!source) return;
+    navigate(`${location.pathname}${location.search}`, {
+      replace: true,
+      state: null,
+    });
+    setLinkedQuotationId(source.id);
+    setConversionNotices(source.notices);
+    if (source.items.length > 0) {
+      setItems((current) =>
+        source.items.map((line, index) => ({
+          id: index + 1,
+          description: line.description,
+          accountCode: current[0]?.accountCode ?? "411",
+          quantity: line.quantity,
+          unitPrice: salesUnitPrice(line.unitPrice),
+          discount: line.discount,
+          // فواتير المبيعات بنسبة 15% فقط
+          taxPercent: SAUDI_STANDARD_VAT_RATE,
+          productId: line.productId,
+        })),
+      );
+      setOrderAccountsPending(source.items.some((line) => Boolean(line.productId)));
+    }
+    if (source.customer.trim()) {
+      setPendingOrderCustomer({
+        id: "",
+        name: source.customer,
+        vat: source.customerVat,
+        address: source.customerAddress,
+        fromQuotation: true,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     if (!pendingOrderCustomer || customerOptions.length === 0) return;
+    const vat = String(pendingOrderCustomer.vat ?? "").trim();
+    const name = pendingOrderCustomer.name.trim();
+    // المعرّف، ثم الاسم والرقم الضريبي معًا، ثم الرقم الضريبي، ثم الاسم (فروع بالرقم الضريبي نفسه)
     const option =
       customerOptions.find(
         (row) => Boolean(pendingOrderCustomer.id) && row.id === pendingOrderCustomer.id,
       ) ??
-      customerOptions.find(
-        (row) => row.name === pendingOrderCustomer.name.trim(),
-      );
+      (vat ? customerOptions.find((row) => row.vatNumber.trim() === vat && row.name === name) : undefined) ??
+      (vat ? customerOptions.find((row) => row.vatNumber.trim() === vat) : undefined) ??
+      customerOptions.find((row) => row.name === name);
     setPendingOrderCustomer(null);
     if (option) {
       selectCustomerOption(option);
+    } else if (pendingOrderCustomer.fromQuotation) {
+      // عميل العرض ليس في القائمة: يُكتب كما في العرض (المنتجات المخزنية تتطلب عميلًا من القائمة)
+      setCustomerId("");
+      setCustomer(pendingOrderCustomer.name.trim());
+      setBuyerVat(vat);
+      setCustomerAddress(String(pendingOrderCustomer.address ?? ""));
+      toast({
+        title: t("عميل عرض السعر غير موجود في العملاء النشطين"),
+        description: t("كُتب الاسم كما في العرض؛ اختر العميل من القائمة أو سجّله لإصدار فاتورة ضريبية أو لبيع منتجات مخزنية"),
+      });
     } else {
       toast({
         title: t("عميل أمر البيع غير موجود في العملاء النشطين"),
@@ -2954,6 +3147,12 @@ function InvoiceForm({
       updateItem(lineId, { productId: undefined });
       return;
     }
+    if (product.vatRate !== SAUDI_STANDARD_VAT_RATE) {
+      toast({
+        title: t("نسبة ضريبة الصنف ليست 15%"),
+        description: t("فاتورة المبيعات بنسبة 15% لكل البنود؛ السعر قبل الضريبة كما في الصنف"),
+      });
+    }
     const revenueKnown =
       !revenueAccounts.length || revenueAccounts.some((account) => account.code === product.revenueAccountCode);
     setItems((prev) =>
@@ -2963,7 +3162,8 @@ function InvoiceForm({
               ...item,
               productId: product.id,
               description: product.nameAr,
-              unitPrice: product.salePrice > 0 ? product.salePrice : item.unitPrice,
+              // سعر الوحدة في الفاتورة بخانتين (سعر الصنف قبل الضريبة بأربع خانات)
+              unitPrice: product.salePrice > 0 ? salesUnitPrice(product.salePrice) : item.unitPrice,
               accountCode: product.revenueAccountCode && revenueKnown ? product.revenueAccountCode : item.accountCode,
             }
           : item,
@@ -3040,7 +3240,7 @@ function InvoiceForm({
             description: product?.nameAr || line?.nameAr || "",
             accountCode: revenueKnown && product ? product.revenueAccountCode : (prev[0]?.accountCode ?? "411"),
             quantity: deficit,
-            unitPrice: product && product.salePrice > 0 ? product.salePrice : 0,
+            unitPrice: product && product.salePrice > 0 ? salesUnitPrice(product.salePrice) : 0,
             discount: 0,
             taxPercent: SAUDI_STANDARD_VAT_RATE,
             productId,
@@ -3071,6 +3271,12 @@ function InvoiceForm({
       };
     },
     { subtotal: 0, discount: 0, tax: 0, total: 0 },
+  );
+
+  // S18: المجاميع كما تُحفظ وتُرحَّل؛ issue: مبالغ بنود لا تطابق المجموع بعد التقريب (الحفظ يُمنع، والتنبيه يظهر أثناء التعديل)
+  const invoiceAmounts = useMemo(
+    () => salesInvoiceAmounts(items, (item) => Number(item.unitPrice)),
+    [items],
   );
 
   const handleSave = async (intent: "save" | "print") => {
@@ -3159,12 +3365,32 @@ function InvoiceForm({
           Number(item.quantity) * Number(item.unitPrice) ||
         Number(item.taxPercent) !== SAUDI_STANDARD_VAT_RATE,
     );
-    if (invalidLine || !(totals.total > 0)) {
+    if (invalidLine || !(invoiceAmounts.total > 0)) {
       toast({
         title: t("بنود الفاتورة غير مكتملة"),
         description: t(
           "كل بند يحتاج وصفًا وكمية وسعرًا أكبر من صفر، والخصم لا يتجاوز قيمة البند",
         ),
+        variant: "destructive",
+      });
+      return;
+    }
+    // S18: سعر الوحدة بخانتين على الأكثر (قيد الفاتورة يقرّب كل بند، والتحقق والهيئة على المجموع)
+    const fractionalPrice = items.find((item) => hasSubHalala(Number(item.unitPrice)));
+    if (fractionalPrice) {
+      toast({
+        title: t("سعر الوحدة بخانتين عشريتين على الأكثر"),
+        description: `${fractionalPrice.description || "-"}: ${fractionalPrice.unitPrice} — ${t("قرّبه إلى")} ${salesUnitPrice(Number(fractionalPrice.unitPrice))}`,
+        variant: "destructive",
+      });
+      return;
+    }
+    // S18: الكمية بكسور أو الخصم بأكثر من خانتين يجعلان مبلغ البند بكسور الهللة؛ تقريب كل بند في القيد
+    // يجعل مجموعها غير المجموع الفرعي، فيُرفض الترحيل (القيد غير متوازن)
+    if (invoiceAmounts.issue) {
+      toast({
+        title: t("مبالغ البنود لا تطابق المجموع بعد التقريب"),
+        description: roundingIssueText(invoiceAmounts, t),
         variant: "destructive",
       });
       return;
@@ -3287,7 +3513,10 @@ function InvoiceForm({
     }
 
     try {
-      const totalValue = totals.total;
+      // المجاميع كما يرحّلها القيد (مبلغ كل بند مقرّبًا إلى هللة): ما يُحفظ هو ما يُرحَّل
+      const subtotalValue = invoiceAmounts.subtotal;
+      const taxValue = invoiceAmounts.tax;
+      const totalValue = invoiceAmounts.total;
       const payload = {
         id: invoiceId,
         date: issueDate,
@@ -3301,8 +3530,8 @@ function InvoiceForm({
           buyerCommercialRegistration || null,
         notes: notes.trim() || null,
         items,
-        subtotal: totals.subtotal,
-        total_tax: totals.tax,
+        subtotal: subtotalValue,
+        total_tax: taxValue,
         total: `ريال ${totalValue.toFixed(2)}`,
         paid: "ريال 0.00",
         remaining: `ريال ${totalValue.toFixed(2)}`,
@@ -3311,6 +3540,8 @@ function InvoiceForm({
         // S17: يُرسلان فقط عند الحاجة (القاعدة قبل S17 لا تعرف العمودين)
         ...(needsWarehouse ? { warehouse_id: warehouseId } : {}),
         ...(linkedDeliveryIds.length > 0 ? { linked_delivery_ids: linkedDeliveryIds } : {}),
+        // S18: عرض السعر المحوّل (القاعدة تغلقه وتربطه بالفاتورة، أو ترفض الفاتورة إن حُوّل مسبقًا)
+        ...(linkedQuotationId ? { quotation_id: linkedQuotationId } : {}),
       };
 
       // الرقم والتاريخ تحددهما القاعدة؛ id المرسل للتوافق فقط
@@ -3365,7 +3596,7 @@ function InvoiceForm({
         toast({
           title: t("تعذر حفظ الفاتورة"),
           description:
-            error.code === "23505"
+            error.code === "23505" && !String(error.message ?? "").includes("quotation")
               ? t("يبدو أن الفاتورة حُفظت في محاولة سابقة؛ حدّث القائمة قبل إعادة المحاولة.")
               : error.message
                 ? t(salesInvoiceErrorText(String(error.message)))
@@ -3705,6 +3936,53 @@ function InvoiceForm({
                   </div>
                 )}
 
+                {/* S18: فاتورة من عرض سعر */}
+                {linkedQuotationId && (
+                  <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2 text-start">
+                    <p className="text-[12px] text-indigo-900">
+                      {t("فاتورة من عرض السعر")} <span dir="ltr" className="font-semibold">{linkedQuotationId}</span>
+                      {" — "}
+                      {t("يُغلق العرض ويُربط بالفاتورة عند حفظها")}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setLinkedQuotationId("")}
+                      className="rounded-md border border-indigo-200 bg-white px-2 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-50"
+                    >
+                      {t("فك الربط بالعرض")}
+                    </button>
+                  </div>
+                )}
+
+                {/* S18: ملاحظات التحويل من العرض أو الأمر */}
+                {conversionNotices.length > 0 && (
+                  <div className="md:col-span-2 flex items-start justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-start">
+                    <ul className="list-disc space-y-0.5 ps-4 text-[12px] text-amber-900">
+                      {conversionNotices.map((notice) => (
+                        <li key={notice}>{notice}</li>
+                      ))}
+                    </ul>
+                    <button
+                      type="button"
+                      onClick={() => setConversionNotices([])}
+                      aria-label={t("إغلاق")}
+                      title={t("إغلاق")}
+                      className="rounded-md px-1.5 text-[14px] leading-none text-amber-800 hover:bg-amber-100"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+
+                {/* S18: مبالغ بنود بكسور الهللة لا تطابق المجموع (الحفظ يُمنع حتى تُعدَّل) */}
+                {invoiceAmounts.issue && (
+                  <div className="md:col-span-2 rounded-lg border border-rose-200 bg-rose-50/70 px-3 py-2 text-start text-[12px] text-rose-900">
+                    <span className="font-semibold">{t("مبالغ البنود لا تطابق المجموع بعد التقريب")}</span>
+                    {" — "}
+                    {roundingIssueText(invoiceAmounts, t)}
+                  </div>
+                )}
+
                 {/* S17: إشعارات تسليم سابقة للعميل لم تُفوتر؛ المختار منها لا يُصرف مرة ثانية */}
                 {priorDeliveries.deliveries.length > 0 && (
                   <div className="space-y-2 md:col-span-2 rounded-lg border border-sky-200 bg-sky-50/60 p-3 text-start">
@@ -3979,7 +4257,7 @@ function InvoiceForm({
                 <div className="space-y-2 text-end">
                   <div className="text-sm">
                     <span className="text-sm font-bold text-foreground">
-                      {formatNumber(totals.tax, {
+                      {formatNumber(invoiceAmounts.tax, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}{" "}
@@ -3988,7 +4266,7 @@ function InvoiceForm({
                   </div>
                   <div className="text-sm">
                     <span className="font-bold text-blue-600">
-                      {formatNumber(totals.total, {
+                      {formatNumber(invoiceAmounts.total, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}{" "}
@@ -4005,7 +4283,7 @@ function InvoiceForm({
                 <div className="space-y-2 text-end">
                   <div className="text-sm">
                     <span className="text-sm font-bold text-foreground">
-                      {formatNumber(totals.subtotal, {
+                      {formatNumber(invoiceAmounts.subtotal, {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2,
                       })}{" "}

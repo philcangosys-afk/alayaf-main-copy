@@ -3,10 +3,15 @@ import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
-import { checkPerm, permissionForHRPath, permissionForMainPath, permissionForMainSubPath, readUserSession } from "@/lib/authSession";
+import {
+  checkPerm, hotelAccessAllowed, permissionForHotelPath, permissionForHRPath, permissionForMainPath, permissionForMainSubPath,
+  permissionLevelAny, readUserSession,
+} from "@/lib/authSession";
 import { useCompany } from "@/lib/companyContext";
 import { isSaudiCompany, isSaudiOnlyPath } from "@/lib/companyProfile";
 import { buildBusinessSession } from "@/lib/businessSession";
+import { entitledPermissionKeys, moduleForPath, hasCompanyModule } from "@/lib/companyModules";
+import ModuleNotIncluded from "@/components/ModuleNotIncluded";
 import { toast } from "sonner";
 
 /**
@@ -124,11 +129,27 @@ export default function RequireAuth() {
     );
   }
 
+  // S19: صفحة من قسم غير مشمول في باقة المنشأة (الخادم يحجب بياناته على أي حال)
+  const pathModule = moduleForPath(location.pathname);
+  if (pathModule && !hasCompanyModule(company.modules, pathModule)) {
+    return <ModuleNotIncluded module={pathModule} />;
+  }
+
+  // S20: الحجوزات: أي مفتاح يمنح (كما في الخادم)، ولوحة الاستقبال لمن يملك أي صلاحية حجوزات
+  if (location.pathname.startsWith("/hotel")) {
+    const allowed = location.pathname === "/hotel" || location.pathname === "/hotel/"
+      ? hotelAccessAllowed(permissions)
+      : permissionLevelAny(permissions, permissionForHotelPath(location.pathname)) !== "none";
+    return allowed ? <Outlet /> : <Navigate to="/" replace />;
+  }
+
   // «الطلبات الواردة» لكل مستخدم: تعرض ما وُجّه إليه فقط (المستلم في قاعدة البيانات)، فمعتمد الرواتب
   // أو المدير المباشر يقرر في طلبه ولو لم تكن له صلاحية قسم الطلبات
   if (location.pathname !== "/" && !location.pathname.startsWith("/hr/requests/incoming")) {
     const mainKey = permissionForMainPath(location.pathname);
-    const keys = location.pathname.startsWith("/hr") ? permissionForHRPath(location.pathname) : permissionForMainSubPath(location.pathname);
+    // مفاتيح الأقسام غير المشمولة لا تفتح صفحة (سجل النشاط بـ module.hr بلا الموارد البشرية مثلًا)
+    const keys = entitledPermissionKeys(company.modules,
+      location.pathname.startsWith("/hr") ? permissionForHRPath(location.pathname) : permissionForMainSubPath(location.pathname));
     if (mainKey && !checkPerm(permissions, ...keys)) return <Navigate to="/" replace />;
     // الصفحات السعودية (الهيئة والتأمينات والإقرار الضريبي) لمنشآت السعودية فقط (S14)
     if (isSaudiOnlyPath(location.pathname) && !isSaudiCompany(company.company?.country)) return <Navigate to="/" replace />;

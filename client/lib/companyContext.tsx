@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { supabase } from "@/lib/supabaseClient";
 import { applyCompanyProfile, type CompanyRecord, type CompanyStatus, type LastRejection, type MyCompanyResult } from "@/lib/companyProfile";
 import { SUBSCRIPTION_ERROR_EVENT, type SubscriptionInfo } from "@/lib/subscription";
+import { parseCompanyModules, type CompanyModule } from "@/lib/companyModules";
 
 /**
  * حالة المنشأة للمستخدم الحالي (نظام الشركات).
@@ -18,6 +19,8 @@ export type CompanyState = {
   lastRejection: LastRejection | null;
   /** S15: اشتراك المنشأة (التجربة، الباقة، القراءة فقط). null قبل التحميل أو إن لم تُطبَّق S15 بعد */
   subscription: SubscriptionInfo | null;
+  /** S19: أقسام المنشأة (المحاسبة، الموارد البشرية، الحجوزات). null = لم تُقرأ (قبل S19 أو تعذر): لا إخفاء */
+  modules: CompanyModule[] | null;
   /** حساب الدخول الذي حُمّلت له الحالة */
   userId: string | null;
   error: string;
@@ -36,6 +39,7 @@ const initialState: CompanyState = {
   company: null,
   lastRejection: null,
   subscription: null,
+  modules: null,
   userId: null,
   error: "",
 };
@@ -53,6 +57,7 @@ function toState(result: MyCompanyResult | null, userId: string | null): Company
     company,
     lastRejection: result?.last_rejection ?? null,
     subscription: null,
+    modules: null,
     userId,
     error: "",
   };
@@ -63,6 +68,13 @@ async function loadSubscription(): Promise<SubscriptionInfo | null> {
   const { data, error } = await supabase.rpc("my_subscription");
   if (error || !data || typeof data !== "object") return null;
   return data as SubscriptionInfo;
+}
+
+/** S19: أقسام المنشأة. خطأ القراءة (أو S19 غير مطبّق) لا يوقف النظام: لا إخفاء، والخادم يحجب */
+async function loadModules(): Promise<CompanyModule[] | null> {
+  const { data, error } = await supabase.rpc("my_company_modules");
+  if (error) return null;
+  return parseCompanyModules(data);
 }
 
 /** قراءة حالة المنشأة من قاعدة البيانات (تُستخدم أيضًا مباشرة في صفحات الدخول) */
@@ -80,7 +92,11 @@ export async function loadCompanyState(): Promise<CompanyState> {
   }
   const state = toState((data ?? null) as MyCompanyResult | null, userId);
   applyCompanyProfile(state.status === "active" ? state.company : null);
-  if (state.status === "active") state.subscription = await loadSubscription();
+  if (state.status === "active") {
+    const [subscription, modules] = await Promise.all([loadSubscription(), loadModules()]);
+    state.subscription = subscription;
+    state.modules = modules;
+  }
   return state;
 }
 

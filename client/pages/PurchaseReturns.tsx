@@ -13,8 +13,10 @@ import {
   Loader2,
   RotateCcw,
   Printer,
+  Download,
 } from "lucide-react";
 import { cn, escapeHtml, riyadhDateString } from "@/lib/utils";
+import { openDocumentOutput, type DocumentOutputMode } from "@/lib/pdfDownload";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
 import { dbErrorText } from "@/lib/dbErrors";
@@ -135,8 +137,9 @@ export default function PurchaseReturns() {
     }
   };
 
-  const handlePrintPdf = (ret: PurchaseReturn) => {
-    const printWindow = window.open("", "_blank");
+  // S18: «PDF» يُحمَّل ملفًا مباشرة، و«طباعة» تفتح نافذة الطباعة (المستند نفسه)
+  const handlePrintPdf = (ret: PurchaseReturn, mode: DocumentOutputMode = "download") => {
+    const printWindow = openDocumentOutput(mode, ret.id);
     if (!printWindow) return;
     const items = ret.items.length > 0
       ? ret.items
@@ -197,7 +200,8 @@ export default function PurchaseReturns() {
             onView={(r) => { setSelected(r); setView("details"); }}
             onEdit={(r) => { setSelected(r); setView("edit"); }}
             onDelete={handleDelete}
-            onPrintPdf={handlePrintPdf}
+            onPrintPdf={(ret) => handlePrintPdf(ret, "download")}
+            onPrint={(ret) => handlePrintPdf(ret, "print")}
           />
         )}
         {view === "create" && (
@@ -215,7 +219,8 @@ export default function PurchaseReturns() {
             ret={selected}
             onBack={() => setView("list")}
             onEdit={() => setView("edit")}
-            onPrintPdf={handlePrintPdf}
+            onPrintPdf={(ret) => handlePrintPdf(ret, "download")}
+            onPrint={(ret) => handlePrintPdf(ret, "print")}
           />
         )}
         {view === "edit" && selected && (
@@ -238,7 +243,7 @@ export default function PurchaseReturns() {
 
 /* ── List ── */
 function ReturnsList({
-  returns, onCreateClick, onView, onEdit, onDelete, onPrintPdf,
+  returns, onCreateClick, onView, onEdit, onDelete, onPrintPdf, onPrint,
 }: {
   returns: PurchaseReturn[];
   onCreateClick: () => void;
@@ -246,6 +251,7 @@ function ReturnsList({
   onEdit: (r: PurchaseReturn) => void;
   onDelete: (id: string) => void;
   onPrintPdf: (r: PurchaseReturn) => void;
+  onPrint: (r: PurchaseReturn) => void;
 }) {
   return (
     <div className="space-y-6">
@@ -281,11 +287,19 @@ function ReturnsList({
                 <ActionBtn icon={Edit} label="تعديل" color="emerald" onClick={() => onEdit(ret)} />
                 <ActionBtn icon={Trash2} label="حذف" color="red" onClick={() => onDelete(ret.id)} />
                 <button
-                  title="PDF"
+                  title="تحميل PDF"
                   onClick={() => onPrintPdf(ret)}
                   className="px-2.5 py-1.5 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors text-xs font-semibold"
                 >
                   PDF
+                </button>
+                <button
+                  title="طباعة"
+                  aria-label="طباعة"
+                  onClick={() => onPrint(ret)}
+                  className="px-2 py-1.5 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  <Printer className="h-3.5 w-3.5" />
                 </button>
               </div>
             </td>
@@ -320,8 +334,8 @@ function ReturnsList({
 }
 
 /* ── Details ── */
-function ReturnDetails({ ret, onBack, onEdit, onPrintPdf }: {
-  ret: PurchaseReturn; onBack: () => void; onEdit: () => void; onPrintPdf: (r: PurchaseReturn) => void;
+function ReturnDetails({ ret, onBack, onEdit, onPrintPdf, onPrint }: {
+  ret: PurchaseReturn; onBack: () => void; onEdit: () => void; onPrintPdf: (r: PurchaseReturn) => void; onPrint: (r: PurchaseReturn) => void;
 }) {
   const items = ret.items.length > 0 ? ret.items
     : [{ id: 1, description: "-", originalQty: 1, returnedQty: 1, price: Number(ret.total) || 0, costCenter: "", taxPercent: 0 }];
@@ -336,7 +350,8 @@ function ReturnDetails({ ret, onBack, onEdit, onPrintPdf }: {
           <RotateCcw className="h-5 w-5 text-red-600" />
         </div>
         <div className="flex gap-2">
-          <button onClick={() => onPrintPdf(ret)} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50 flex items-center gap-2"><Printer className="h-4 w-4" /> طباعة PDF</button>
+          <button onClick={() => onPrintPdf(ret)} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50 flex items-center gap-2"><Download className="h-4 w-4" /> تحميل PDF</button>
+          <button onClick={() => onPrint(ret)} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50 flex items-center gap-2"><Printer className="h-4 w-4" /> طباعة</button>
           <button onClick={onEdit} className="px-4 py-2 bg-emerald-600 text-white text-sm rounded hover:bg-emerald-700 flex items-center gap-2"><Edit className="h-4 w-4" /> تعديل</button>
         </div>
       </div>

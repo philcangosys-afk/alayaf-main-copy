@@ -16,7 +16,9 @@ import {
   FileText,
   CreditCard,
   Printer,
+  Download,
 } from "lucide-react";
+import { openDocumentOutput, type DocumentOutputMode } from "@/lib/pdfDownload";
 import {
   cn,
   riyadhDateString,
@@ -301,8 +303,9 @@ export default function PurchaseInvoices() {
     }
   };
 
-  const handlePrintPdf = (invoice: PurchaseInvoice) => {
-    const printWindow = window.open("", "_blank");
+  // S18: «PDF» يُحمَّل ملفًا مباشرة، و«طباعة» تفتح نافذة الطباعة (المستند نفسه)
+  const handlePrintPdf = (invoice: PurchaseInvoice, mode: DocumentOutputMode = "download") => {
+    const printWindow = openDocumentOutput(mode, invoice.id);
     if (!printWindow) return;
 
     const escapeHtml = (value: unknown) =>
@@ -481,7 +484,8 @@ export default function PurchaseInvoices() {
               setView("payment");
             }}
             onDelete={handleDelete}
-            onPrintPdf={handlePrintPdf}
+            onPrintPdf={(invoice) => handlePrintPdf(invoice, "download")}
+            onPrint={(invoice) => handlePrintPdf(invoice, "print")}
           />
         )}
         {view === "create" && (
@@ -503,7 +507,8 @@ export default function PurchaseInvoices() {
             invoice={selected}
             onBack={() => setView("list")}
             onEdit={() => { if (selected.accountingStatus !== "posted") setView("edit"); }}
-            onPrintPdf={handlePrintPdf}
+            onPrintPdf={(invoice) => handlePrintPdf(invoice, "download")}
+            onPrint={(invoice) => handlePrintPdf(invoice, "print")}
           />
         )}
         {view === "edit" && selected && (
@@ -558,6 +563,7 @@ function InvoicesList({
   onPayment,
   onDelete,
   onPrintPdf,
+  onPrint,
 }: {
   invoices: PurchaseInvoice[];
   canViewIssuer: boolean;
@@ -569,6 +575,7 @@ function InvoicesList({
   onPayment: (i: PurchaseInvoice) => void;
   onDelete: (id: string) => void;
   onPrintPdf: (i: PurchaseInvoice) => void;
+  onPrint: (i: PurchaseInvoice) => void;
 }) {
   const { t, direction, formatDate, formatNumber } = useI18n();
   const formatAmount = (value: string) =>
@@ -678,11 +685,19 @@ function InvoicesList({
                       onClick={() => onDelete(inv.id)}
                     />}
                     <button
-                      title={t("طباعة PDF")}
+                      title={t("تحميل PDF")}
                       onClick={() => onPrintPdf(inv)}
                       className="px-2.5 py-1.5 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors text-xs font-semibold"
                     >
                       PDF
+                    </button>
+                    <button
+                      title={t("طباعة")}
+                      aria-label={t("طباعة")}
+                      onClick={() => onPrint(inv)}
+                      className="px-2 py-1.5 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors"
+                    >
+                      <Printer className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </td>
@@ -746,11 +761,13 @@ function InvoiceDetails({
   onBack,
   onEdit,
   onPrintPdf,
+  onPrint,
 }: {
   invoice: PurchaseInvoice;
   onBack: () => void;
   onEdit: () => void;
   onPrintPdf: (i: PurchaseInvoice) => void;
+  onPrint: (i: PurchaseInvoice) => void;
 }) {
   const { t, direction, formatDate, formatNumber } = useI18n();
   const formatAmount = (value: number) =>
@@ -830,7 +847,13 @@ function InvoiceDetails({
             onClick={() => onPrintPdf(invoice)}
             className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50 flex items-center gap-2"
           >
-            <Printer className="h-4 w-4" /> {t("طباعة PDF")}
+            <Download className="h-4 w-4" /> {t("تحميل PDF")}
+          </button>
+          <button
+            onClick={() => onPrint(invoice)}
+            className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50 flex items-center gap-2"
+          >
+            <Printer className="h-4 w-4" /> {t("طباعة")}
           </button>
           {invoice.accountingStatus !== "posted" && <button
             onClick={onEdit}
@@ -1415,6 +1438,12 @@ function useInvoiceForm(initial?: Partial<PurchaseInvoice>) {
   const setField = (field: keyof typeof form, value: string) =>
     setForm((prev) => ({ ...prev, [field]: value }));
 
+  // S18: أصناف بنسبة 0% (من قائمة الأصناف في النموذج): تبقى 0% عند الانتقال إلى مورد مسجل
+  const zeroRatedProductsRef = useRef<Set<string>>(new Set());
+  const setZeroRatedProducts = (ids: Set<string>) => {
+    zeroRatedProductsRef.current = ids;
+  };
+
   // المورد غير المقيم: نوع الفاتورة (احتساب عكسي/بضائع/غير خاضعة) وعملة فاتورته وسعر الصرف
   const [importInfo, setImportInfo] = useState({
     vendorId: "",
@@ -1447,9 +1476,13 @@ function useInvoiceForm(initial?: Partial<PurchaseInvoice>) {
     if (state === "no") {
       setItems((prev) => prev.map((item) => ({ ...item, taxPercent: 0 })));
     } else if (state === "yes" && previous === "no") {
-      // الصفر كان مفروضًا بسبب المورد السابق، فنعيد النسبة الأساسية عند اختيار مورد مسجل
+      // الصفر كان مفروضًا بسبب المورد السابق، فنعيد النسبة الأساسية عند اختيار مورد مسجل (إلا أصناف 0%)
       setItems((prev) =>
-        prev.map((item) => ({ ...item, taxPercent: SAUDI_STANDARD_VAT_RATE })),
+        prev.map((item) => ({
+          ...item,
+          taxPercent:
+            item.productId && zeroRatedProductsRef.current.has(item.productId) ? 0 : SAUDI_STANDARD_VAT_RATE,
+        })),
       );
     }
   };
@@ -1495,6 +1528,7 @@ function useInvoiceForm(initial?: Partial<PurchaseInvoice>) {
     form,
     setField,
     setVendorVat,
+    setZeroRatedProducts,
     importInfo,
     updateImport,
     items,
@@ -1679,6 +1713,7 @@ function InvoiceForm({
     form,
     setField,
     setVendorVat,
+    setZeroRatedProducts,
     importInfo,
     updateImport,
     items,
@@ -1709,6 +1744,10 @@ function InvoiceForm({
     () => new Map(catalog.items.map((product) => [product.id, product] as const)),
     [catalog.items],
   );
+  useEffect(() => {
+    setZeroRatedProducts(new Set(catalog.items.filter((product) => product.vatRate === 0).map((product) => product.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog.items]);
   const [pickerLineId, setPickerLineId] = useState<number | null>(null);
   // الاستلام: «now» مع الفاتورة، أو «later» بسند استلام منفصل (سابق أو لاحق). الاختيار إلزامي عند وجود منتج مخزني،
   // فلا تُستلم بضاعة استُلمت بسند سابق مرة ثانية دون قصد
@@ -1756,6 +1795,13 @@ function InvoiceForm({
       description: product.nameAr,
       unit: product.unit,
       unitPrice: !isForeign && product.purchasePrice ? product.purchasePrice : (current?.unitPrice ?? 0),
+      // S18: نسبة البند من الصنف المختار (0% أو 15%)، والمورد غير المسجل 0% دائمًا؛ صنف بنسبة أخرى يبقي نسبة البند
+      taxPercent:
+        form.vendorVat === "no" || product.vatRate === 0
+          ? 0
+          : product.vatRate === SAUDI_STANDARD_VAT_RATE
+            ? SAUDI_STANDARD_VAT_RATE
+            : (current?.taxPercent ?? SAUDI_STANDARD_VAT_RATE),
       accountCode:
         product.itemType === "product"
           ? stockAccount || "2113"
@@ -2327,6 +2373,7 @@ function InvoiceEdit({
     form,
     setField,
     setVendorVat,
+    setZeroRatedProducts,
     importInfo,
     items,
     addItem,
@@ -2334,6 +2381,12 @@ function InvoiceEdit({
     removeItem,
     totals,
   } = useInvoiceForm(invoice);
+  // S18: أصناف 0% تبقى 0% عند الانتقال إلى مورد مسجل (كما في نموذج الإنشاء)
+  const editCatalog = useItemCatalog();
+  useEffect(() => {
+    setZeroRatedProducts(new Set(editCatalog.items.filter((product) => product.vatRate === 0).map((product) => product.id)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editCatalog.items]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

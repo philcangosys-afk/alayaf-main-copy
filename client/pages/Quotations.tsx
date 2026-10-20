@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Layout from "@/components/Layout";
 import { salesFeatures } from "./Sales";
 import {
@@ -12,6 +13,8 @@ import {
   Download,
   Loader2,
   Send,
+  Printer,
+  FileText,
 } from "lucide-react";
 import { cn, escapeHtml, riyadhDateString } from "@/lib/utils";
 import {
@@ -29,8 +32,9 @@ import { companyNumberLike, nextCompanyNumber, previewNextNumber } from "@/lib/c
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE } from "@/lib/companyProfile";
 import { ItemLinkButton, ItemPickerDialog, StockHint } from "@/components/ItemPicker";
-import { requestedQuantity, useItemCatalog, type CatalogItem } from "@/lib/itemCatalog";
+import { hasSubHalala, requestedQuantity, salesUnitPrice, useItemCatalog, type CatalogItem } from "@/lib/itemCatalog";
 import { dbErrorText } from "@/lib/dbErrors";
+import { openDocumentOutput, type DocumentOutputMode } from "@/lib/pdfDownload";
 
 type QuotationItem = {
   id: number;
@@ -73,7 +77,13 @@ type QuotationRow = {
   status: string;
   statusColor: string;
   items: QuotationItem[];
+  // S18: فاتورة المبيعات المحوّلة من العرض (العرض المحوّل لا يُعدَّل ولا يُحذف)
+  invoiceId: string;
 };
+
+/** S18: العرض المفتوح أو المرسل غير المحوّل يُحوَّل إلى فاتورة مبيعات */
+const canConvertQuotation = (quotation: QuotationRow) =>
+  !quotation.invoiceId && (quotation.status === "مفتوح" || quotation.status === "مرسل");
 
 const statusColors: Record<string, string> = {
   مفتوح: "bg-cyan-500 text-white",
@@ -184,6 +194,7 @@ function mapRow(row: Record<string, unknown>): QuotationRow {
     status,
     statusColor: statusColors[status] ?? "bg-cyan-500 text-white",
     items,
+    invoiceId: String(row.invoice_id ?? ""),
   };
 }
 
@@ -238,8 +249,9 @@ export default function Quotations() {
     }
   };
 
-  const handleDownloadPdf = (quotation: QuotationRow) => {
-    const printWindow = window.open("", "_blank");
+  // S18: «PDF» يُحمَّل ملفًا مباشرة، و«طباعة» تفتح نافذة الطباعة (المستند نفسه)
+  const handleDownloadPdf = (quotation: QuotationRow, mode: DocumentOutputMode = "download") => {
+    const printWindow = openDocumentOutput(mode, quotation.id);
     if (!printWindow) return;
 
     const totals = calculateTotals(quotation.items);
@@ -252,7 +264,7 @@ export default function Quotations() {
           <tr>
             <td>${escapeHtml(item.itemLabel || "-")}</td>
             <td>${escapeHtml(item.description || "-")}</td>
-            <td>${formatNumber(item.unitPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+            <td>${formatNumber(item.unitPrice, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
             <td>${formatNumber(item.quantity)}</td>
             <td>${formatNumber(item.discount, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
             <td>${formatNumber(subtotal, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
@@ -360,6 +372,53 @@ export default function Quotations() {
     printWindow.print();
   };
 
+  // S18: تحويل العرض إلى فاتورة مبيعات: نموذج الفاتورة يُعبأ من العرض، ويُغلق العرض ويُربط بالفاتورة عند حفظها
+  const navigate = useNavigate();
+  const handleConvertToInvoice = (quotation: QuotationRow) => {
+    if (!canConvertQuotation(quotation)) return;
+    const lines = quotation.items.filter(
+      (item) => `${item.itemLabel ?? ""}${item.description ?? ""}`.trim() !== "" && Number(item.quantity) > 0,
+    );
+    if (lines.length === 0) {
+      toast({
+        title: t("لا توجد بنود لتحويلها"),
+        description: t("أضف بنود العرض قبل تحويله إلى فاتورة"),
+        variant: "destructive",
+      });
+      return;
+    }
+    // ملاحظات التحويل تُعرض في شاشة الفاتورة مع تنبيه العميل (التنبيهات واحد في كل مرة)
+    const otherTax = lines.some((item) => Number(item.taxPercent) !== 15);
+    const roundedPrice = lines.some((item) => hasSubHalala(Number(item.unitPrice) || 0));
+    const notices = [
+      otherTax ? t("فواتير المبيعات تعتمد 15%؛ بنود العرض بنسبة أخرى ستظهر في الفاتورة بنسبة 15%") : "",
+      roundedPrice ? t("سعر الوحدة في فاتورة المبيعات بخانتين؛ راجع مبالغ البنود قبل الحفظ") : "",
+    ].filter(Boolean);
+    navigate("/sales/invoices", {
+      state: {
+        fromQuotation: {
+          id: quotation.id,
+          customer: quotation.customer,
+          customerVat: quotation.customerVat,
+          customerAddress: quotation.customerAddress,
+          notices,
+          items: lines.map((item) => {
+            const label = String(item.itemLabel ?? "").trim();
+            const detail = String(item.description ?? "").trim();
+            return {
+              description: label && detail && label !== detail ? `${label} - ${detail}` : label || detail,
+              quantity: Number(item.quantity) || 0,
+              // سعر الوحدة في الفاتورة بخانتين
+              unitPrice: salesUnitPrice(Number(item.unitPrice) || 0),
+              discount: Number(item.discount) || 0,
+              ...(item.productId ? { productId: item.productId } : {}),
+            };
+          }),
+        },
+      },
+    });
+  };
+
   return (
     <Layout
       subMenu={{
@@ -381,7 +440,9 @@ export default function Quotations() {
               setView("edit");
             }}
             onDelete={handleDelete}
-            onDownloadPdf={handleDownloadPdf}
+            onDownloadPdf={(quotation) => handleDownloadPdf(quotation, "download")}
+            onPrint={(quotation) => handleDownloadPdf(quotation, "print")}
+            onConvert={handleConvertToInvoice}
           />
         )}
 
@@ -402,7 +463,9 @@ export default function Quotations() {
             quotation={selectedQuotation}
             onBack={() => setView("list")}
             onEdit={() => setView("edit")}
-            onDownloadPdf={handleDownloadPdf}
+            onDownloadPdf={(quotation) => handleDownloadPdf(quotation, "download")}
+            onPrint={(quotation) => handleDownloadPdf(quotation, "print")}
+            onConvert={handleConvertToInvoice}
           />
         )}
 
@@ -433,6 +496,8 @@ function QuotationsList({
   onEdit,
   onDelete,
   onDownloadPdf,
+  onPrint,
+  onConvert,
 }: {
   quotations: QuotationRow[];
   onCreateClick: () => void;
@@ -440,6 +505,8 @@ function QuotationsList({
   onEdit: (quotation: QuotationRow) => void;
   onDelete: (quotationId: string) => void;
   onDownloadPdf: (quotation: QuotationRow) => void;
+  onPrint: (quotation: QuotationRow) => void;
+  onConvert: (quotation: QuotationRow) => void;
 }) {
   const { t, direction, formatDate, formatNumber } = useI18n();
   // فلترة فعلية بدل حقول البحث التي لم تكن موصولة
@@ -527,12 +594,15 @@ function QuotationsList({
                   color="blue"
                   onClick={() => onView(row)}
                 />
-                <ActionBtn
-                  icon={Edit}
-                  label={t("تعديل")}
-                  color="emerald"
-                  onClick={() => onEdit(row)}
-                />
+                {/* S18: العرض المحوّل إلى فاتورة لا يُعدَّل ولا يُحذف */}
+                {!row.invoiceId && (
+                  <ActionBtn
+                    icon={Edit}
+                    label={t("تعديل")}
+                    color="emerald"
+                    onClick={() => onEdit(row)}
+                  />
+                )}
                 <ActionBtn
                   icon={Download}
                   label="PDF"
@@ -540,11 +610,27 @@ function QuotationsList({
                   onClick={() => onDownloadPdf(row)}
                 />
                 <ActionBtn
-                  icon={Trash2}
-                  label={t("حذف")}
-                  color="red"
-                  onClick={() => onDelete(row.id)}
+                  icon={Printer}
+                  label={t("طباعة")}
+                  color="slate"
+                  onClick={() => onPrint(row)}
                 />
+                {canConvertQuotation(row) && (
+                  <ActionBtn
+                    icon={FileText}
+                    label={t("تحويل إلى فاتورة")}
+                    color="indigo"
+                    onClick={() => onConvert(row)}
+                  />
+                )}
+                {!row.invoiceId && (
+                  <ActionBtn
+                    icon={Trash2}
+                    label={t("حذف")}
+                    color="red"
+                    onClick={() => onDelete(row.id)}
+                  />
+                )}
               </div>
             </td>
             <td className="px-5 py-3.5" style={{ textAlign: "start" }}>
@@ -556,6 +642,11 @@ function QuotationsList({
               >
                 {t(row.status)}
               </span>
+              {row.invoiceId && (
+                <span className="mt-1 block text-[11px] text-muted-foreground">
+                  {t("الفاتورة")}: <span dir="ltr">{row.invoiceId}</span>
+                </span>
+              )}
             </td>
             <td className="px-5 py-3.5 font-bold text-primary whitespace-nowrap">
               {formatNumber(parseCurrency(row.total), {
@@ -632,7 +723,9 @@ function QuotationEditor({
           productId: product.id,
           itemLabel: product.nameAr,
           description: product.description || item.description,
-          unitPrice: product.salePrice > 0 ? product.salePrice : item.unitPrice,
+          unitPrice: product.salePrice > 0 ? salesUnitPrice(product.salePrice) : item.unitPrice,
+          // S18: نسبة البند نسبة الصنف المختار (0% ثم صنف بنسبة 15% يعيد البند 15%)
+          taxPercent: Number.isFinite(product.vatRate) ? product.vatRate : item.taxPercent,
         };
       }),
     );
@@ -710,6 +803,16 @@ function QuotationEditor({
       toast({
         title: t("بيانات ناقصة"),
         description: t("يرجى إدخال رقم العرض والعميل والتاريخ"),
+      });
+      return;
+    }
+    // S18: سعر الوحدة بخانتين كما في فاتورة المبيعات التي يُحوَّل إليها العرض
+    const fractionalPrice = items.find((item) => hasSubHalala(Number(item.unitPrice)));
+    if (fractionalPrice) {
+      toast({
+        title: t("سعر الوحدة بخانتين عشريتين على الأكثر"),
+        description: `${fractionalPrice.itemLabel || fractionalPrice.description || "-"}: ${fractionalPrice.unitPrice} — ${t("قرّبه إلى")} ${salesUnitPrice(Number(fractionalPrice.unitPrice))}`,
+        variant: "destructive",
       });
       return;
     }
@@ -842,6 +945,7 @@ function QuotationEditor({
             status,
             statusColor: statusColors[status] ?? "bg-cyan-500 text-white",
             items,
+            invoiceId: initialData?.invoiceId ?? "",
           }}
         />
 
@@ -1113,11 +1217,15 @@ function QuotationDetails({
   onBack,
   onEdit,
   onDownloadPdf,
+  onPrint,
+  onConvert,
 }: {
   quotation: QuotationRow;
   onBack: () => void;
   onEdit: () => void;
   onDownloadPdf: (quotation: QuotationRow) => void;
+  onPrint: (quotation: QuotationRow) => void;
+  onConvert: (quotation: QuotationRow) => void;
 }) {
   const { t, direction } = useI18n();
 
@@ -1139,11 +1247,31 @@ function QuotationDetails({
             <Download className="h-4 w-4" /> PDF
           </button>
           <button
-            onClick={onEdit}
-            className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold flex items-center gap-1.5"
+            onClick={() => onPrint(quotation)}
+            className="px-4 py-2 rounded-lg border border-slate-300 text-sm font-semibold flex items-center gap-1.5"
           >
-            <Edit className="h-4 w-4" /> {t("تعديل")}
+            <Printer className="h-4 w-4" /> {t("طباعة")}
           </button>
+          {canConvertQuotation(quotation) && (
+            <button
+              onClick={() => onConvert(quotation)}
+              className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold flex items-center gap-1.5"
+            >
+              <FileText className="h-4 w-4" /> {t("تحويل إلى فاتورة")}
+            </button>
+          )}
+          {quotation.invoiceId ? (
+            <span className="px-3 py-2 rounded-lg bg-slate-100 text-sm text-slate-700">
+              {t("حُوّل إلى الفاتورة")} <span dir="ltr" className="font-semibold">{quotation.invoiceId}</span>
+            </span>
+          ) : (
+            <button
+              onClick={onEdit}
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold flex items-center gap-1.5"
+            >
+              <Edit className="h-4 w-4" /> {t("تعديل")}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1256,7 +1384,7 @@ function QuotePreview({ quotation }: { quotation: QuotationRow }) {
                   <td className="border border-slate-300 px-2 py-2 text-center">
                     {formatNumber(item.unitPrice, {
                       minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
+                      maximumFractionDigits: 4,
                     })}
                   </td>
                   <td className="border border-slate-300 px-2 py-2 text-center">

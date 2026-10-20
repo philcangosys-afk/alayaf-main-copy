@@ -42,6 +42,7 @@ import {
   Boxes,
   Truck,
   CheckCircle2,
+  BedDouble,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -51,7 +52,12 @@ import {
   permissionForMainPath,
   permissionForMainSubPath,
   permissionForHRPath,
+  permissionForHotelPath,
+  permissionLevelAny,
+  hotelAccessAllowed,
 } from "@/lib/authSession";
+import { entitledPermissionKeys, hasCompanyModule, moduleForPath, pathAllowedByModules } from "@/lib/companyModules";
+import HotelSidebar from "@/components/hotel/HotelSidebar";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import ReadOnlyBoundary from "@/components/permissions/ReadOnlyBoundary";
 import { useI18n } from "@/i18n";
@@ -569,6 +575,15 @@ const itemColors: Record<
     subBg: "bg-emerald-500/[0.06]",
     border: "border-emerald-400/20",
   },
+  "/hotel": {
+    icon: "from-amber-300 to-rose-600",
+    active: "bg-rose-500/15 border-rose-400/25",
+    glow: "shadow-rose-500/20",
+    dot: "bg-amber-300",
+    text: "text-amber-200",
+    subBg: "bg-rose-500/[0.06]",
+    border: "border-rose-400/20",
+  },
   "/crm": {
     icon: "from-amber-400 to-orange-600",
     active: "bg-amber-500/15 border-amber-500/25",
@@ -652,29 +667,38 @@ function HRSidebar({
   const { permissions: livePerms } = useRolePermissions();
   const { t } = useI18n();
   // الأنظمة السعودية (التأمينات الاجتماعية) لمنشآت السعودية فقط (S14)
-  const saudi = isSaudiCompany(useCompany().company?.country);
+  const companyState = useCompany();
+  const saudi = isSaudiCompany(companyState.company?.country);
+  // S19: بلا قسم الموارد البشرية تبقى الأدوار والمستخدمون وسجل النشاط فقط
+  const companyModules = companyState.modules;
+  const hrOn = hasCompanyModule(companyModules, "hr");
   const allowedHRItems = useMemo(() => {
-    return hrNavItems
+    const visible = (href: string) =>
+      checkPerm(livePerms, ...entitledPermissionKeys(companyModules, permissionForHRPath(href))) && (saudi || !isSaudiOnlyPath(href)) && pathAllowedByModules(companyModules, href);
+    const items = hrNavItems
       .filter((item) => {
-        if (item.isHeader) return true;
+        if (item.isHeader) return hrOn;
         if (item.hasChildren && item.children) {
-          return item.children.some((c) =>
-            checkPerm(livePerms, ...permissionForHRPath(c.href)) && (saudi || !isSaudiOnlyPath(c.href)),
-          );
+          return item.children.some((c) => visible(c.href));
         }
-        return checkPerm(livePerms, ...permissionForHRPath(item.href)) && (saudi || !isSaudiOnlyPath(item.href));
+        return visible(item.href);
       })
       .map((item) =>
         item.hasChildren && item.children
           ? {
               ...item,
-              children: item.children.filter((c) =>
-                checkPerm(livePerms, ...permissionForHRPath(c.href)) && (saudi || !isSaudiOnlyPath(c.href)),
-              ),
+              children: item.children.filter((c) => visible(c.href)),
             }
           : item,
       );
-  }, [livePerms, saudi]);
+    // بلا الموارد البشرية: صفحات المستخدمين والأدوار عناصر مستقلة (لا تحت «الموظفون»)
+    return hrOn
+      ? items
+      : items.flatMap((item): HRNavItem[] =>
+          item.hasChildren && item.children
+            ? item.children.map((child) => ({ icon: child.icon, label: child.label, href: child.href }))
+            : [item]);
+  }, [livePerms, saudi, companyModules, hrOn]);
 
   // Restore scroll position on mount
   useEffect(() => {
@@ -751,10 +775,10 @@ function HRSidebar({
             {sidebarOpen && (
               <div className="flex flex-col">
                 <span className="text-[14px] font-extrabold text-white tracking-tight leading-tight">
-                  {t("الموارد البشرية")}
+                  {t(hrOn ? "الموارد البشرية" : "المستخدمون والصلاحيات")}
                 </span>
                 <span className="text-[10px] font-medium text-emerald-300/60 tracking-wide">
-                  {t("نظام الموارد البشرية")}
+                  {t(hrOn ? "نظام الموارد البشرية" : "الأدوار وحسابات الدخول وسجل النشاط")}
                 </span>
               </div>
             )}
@@ -800,7 +824,7 @@ function HRSidebar({
         onScroll={handleScroll}
         className="main-sidebar-nav relative z-10 flex flex-col gap-0.5 px-3 py-3 flex-1 overflow-y-auto"
       >
-        {sidebarOpen && (
+        {sidebarOpen && hrOn && (
           <p className="px-3 mb-2 text-[10px] font-bold uppercase tracking-[0.15em] text-emerald-300/25">
             {t("أقسام الموارد البشرية")}
           </p>
@@ -1017,7 +1041,10 @@ function MainSidebar({
   const { permissions: livePerms } = useRolePermissions();
   const { t, locale } = useI18n();
   // الإقرار الضريبي السعودي لمنشآت السعودية فقط (S14)
-  const saudiCompany = isSaudiCompany(useCompany().company?.country);
+  const companyState = useCompany();
+  const saudiCompany = isSaudiCompany(companyState.company?.country);
+  // S19: أقسام المنشأة في باقتها
+  const companyModules = companyState.modules;
 
   // Restore scroll position on mount
   useEffect(() => {
@@ -1043,7 +1070,8 @@ function MainSidebar({
       : location.pathname === path ||
         (path !== "/" && location.pathname.startsWith(path));
 
-  const allNavItems = [
+  type MainNavItem = { icon: typeof BarChart3; label: string; href: string; hasSubmenu?: boolean; target?: string };
+  const allNavItems: MainNavItem[] = [
     { icon: BarChart3, label: "لوحة التحكم", href: "/" },
     { icon: FileText, label: "المبيعات", href: "/sales", hasSubmenu: true },
     {
@@ -1053,6 +1081,8 @@ function MainSidebar({
       hasSubmenu: true,
     },
     { icon: Users, label: "الموارد البشرية", href: "/hr" },
+    // S20: الحجوزات لوحة مستقلة مثل الموارد البشرية
+    { icon: BedDouble, label: "الحجوزات", href: "/hotel" },
     {
       icon: CreditCard,
       label: "العملاء والموردين",
@@ -1072,11 +1102,21 @@ function MainSidebar({
     { icon: Settings, label: "الإعدادات", href: "/settings" },
   ];
   const navItems = useMemo(() => {
-    return allNavItems.filter((item) => {
+    return allNavItems.flatMap((item): MainNavItem[] => {
+      if (item.href === "/hotel") {
+        return hasCompanyModule(companyModules, "hotel") && hotelAccessAllowed(livePerms) ? [item] : [];
+      }
+      if (item.href === "/hr" && !hasCompanyModule(companyModules, "hr")) {
+        // بلا الموارد البشرية: الأدوار والمستخدمون وسجل النشاط للجميع، من هنا
+        const target = ["/hr/permissions/roles", "/hr/permissions/special-user", "/hr/user-logs"]
+          .find((href) => checkPerm(livePerms, ...entitledPermissionKeys(companyModules, permissionForHRPath(href))));
+        return target ? [{ ...item, icon: ShieldCheck, label: "المستخدمون والصلاحيات", target }] : [];
+      }
+      if (!hasCompanyModule(companyModules, moduleForPath(item.href))) return [];
       const key = permissionForMainPath(item.href);
-      return key === null || checkPerm(livePerms, key);
+      return key === null || checkPerm(livePerms, key) ? [item] : [];
     });
-  }, [livePerms]);
+  }, [livePerms, companyModules]);
 
   const lastAutoExpandedPath = useRef<string | null>(null);
 
@@ -1186,7 +1226,8 @@ function MainSidebar({
           const subItems = navSubMenus[item.href]?.filter(
             (subItem) =>
               subItem.isHeader ||
-              (checkPerm(livePerms, ...permissionForMainSubPath(subItem.href)) && (saudiCompany || !isSaudiOnlyPath(subItem.href))),
+              (checkPerm(livePerms, ...permissionForMainSubPath(subItem.href)) && (saudiCompany || !isSaudiOnlyPath(subItem.href))
+                && pathAllowedByModules(companyModules, subItem.href)),
           );
           const colors = itemColors[item.href] || itemColors["/"];
 
@@ -1244,7 +1285,7 @@ function MainSidebar({
               {isHR ? (
                 // HR navigates to its own sidebar
                 <button
-                  onClick={() => navigate("/hr/dashboard")}
+                  onClick={() => navigate(item.target ?? "/hr/dashboard")}
                   className={baseClass}
                   title={t(item.label)}
                 >
@@ -1408,6 +1449,8 @@ export default function Layout({ children }: LayoutProps) {
   const [expandedMainMenu, setExpandedMainMenu] = useState<string | null>(null);
 
   const isHRSection = location.pathname.startsWith("/hr");
+  // S20: الحجوزات بلوحة وقائمة مستقلة (إن كان القسم مفعّلًا؛ وإلا تظهر القائمة الرئيسية مع رسالة «غير مشمول»)
+  const isHotelSection = location.pathname.startsWith("/hotel") && hasCompanyModule(company.modules, "hotel");
 
   useEffect(() => {
     setSidebarOpen(true);
@@ -1431,12 +1474,14 @@ export default function Layout({ children }: LayoutProps) {
     localStorage.setItem(cleanupMarker, new Date().toISOString());
   }, []);
 
-  const currentPermissionKeys = isHRSection
+  const currentPermissionKeys = entitledPermissionKeys(company.modules, isHRSection
     ? permissionForHRPath(location.pathname)
-    : permissionForMainSubPath(location.pathname);
-  const readOnly =
-    checkPerm(livePerms, ...currentPermissionKeys) &&
-    !canManagePerm(livePerms, ...currentPermissionKeys);
+    : permissionForMainSubPath(location.pathname));
+  // الحجوزات: أي مفتاح يمنح (كما في الخادم)؛ القراءة فقط إن لم يمنح أيٌّ منها الإدارة
+  const readOnly = isHotelSection
+    ? permissionLevelAny(livePerms, permissionForHotelPath(location.pathname)) === "read"
+    : checkPerm(livePerms, ...currentPermissionKeys) &&
+      !canManagePerm(livePerms, ...currentPermissionKeys);
   // S15: انتهت التجربة أو الاشتراك: كل الصفحات للقراءة فقط، عدا صفحة الاشتراك (طلب الباقة)
   // وإعدادات الهيئة (الربط وتجديد الشهادة) تبقى متاحة: جداولها مستثناة في الخادم
   const subscriptionReadOnly =
@@ -1455,6 +1500,8 @@ export default function Layout({ children }: LayoutProps) {
           expandedMenus={expandedHRMenus}
           setExpandedMenus={setExpandedHRMenus}
         />
+      ) : isHotelSection ? (
+        <HotelSidebar sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
       ) : (
         <MainSidebar
           sidebarOpen={sidebarOpen}
@@ -1475,8 +1522,10 @@ export default function Layout({ children }: LayoutProps) {
             <span className="hidden sm:inline-block h-5 w-px bg-border/60" />
             <span className="hidden sm:inline-block text-[11px] text-muted-foreground font-bold">
               {isHRSection
-                ? t("نظام الموارد البشرية")
-                : t(COMPANY_PROFILE.programNameAr)}
+                ? t(hasCompanyModule(company.modules, "hr") ? "نظام الموارد البشرية" : "المستخدمون والصلاحيات")
+                : isHotelSection
+                  ? t("نظام الحجوزات")
+                  : t(COMPANY_PROFILE.programNameAr)}
             </span>
           </div>
           <div className="flex items-center gap-2">

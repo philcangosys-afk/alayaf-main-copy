@@ -11,6 +11,7 @@ import ZatcaQrCode from "@/components/ZatcaQrCode";
 import { useI18n } from "@/i18n";
 import { COMPANY_PROFILE, zatcaDeviceSerialKey, companyDocPrefix, isSaudiCompany } from "@/lib/companyProfile";
 import { BILLING_COUNTRY_MESSAGE } from "@/lib/countries";
+import { roundHalala } from "@/lib/itemCatalog";
 
 const zatcaStatusLabels: Record<string, string> = {
   pending: "بانتظار الإرسال",
@@ -228,6 +229,27 @@ const creditNoteTranslations: Record<string, string> = {
   "الفاتورة الأصلية صدرت في مسار الربط مع الهيئة والمنشأة الآن في المرحلة الأولى؛ لا يصدر عليها إشعار":
     "The original invoice was issued through ZATCA integration and the company is now in Phase 1; no note can be issued on it",
   "تظهر فواتير المرحلة الأولى والفواتير المقبولة لدى الهيئة": "Phase 1 invoices and invoices accepted by ZATCA are listed",
+  "بنود الفاتورة كما صدرت (لا تُعدَّل). أدخل الكمية التي يشملها الإشعار، والنسبة من سعر الوحدة: 100% إرجاع، وأقل منها تخفيض في السعر.":
+    "Invoice lines as issued (read-only). Enter the quantity the note covers and the percentage of the unit price: 100% is a return, less is a price reduction.",
+  "إرجاع كامل الكميات المتبقية": "Return all remaining quantities",
+  "على الفاتورة إشعارات دائنة سابقة غير مرتبطة بالبنود": "The invoice has earlier credit notes not linked to lines",
+  "راجع الكميات قبل الحفظ": "review the quantities before saving",
+  "الكمية في الفاتورة": "Invoiced quantity",
+  "سعر الوحدة": "Unit price",
+  الخصم: "Discount",
+  "قيمة البند": "Line amount",
+  "أُشعر به سابقًا": "Previously credited",
+  "كمية الإشعار": "Note quantity",
+  "النسبة من السعر %": "% of price",
+  "قيمة الإشعار": "Note amount",
+  المتاح: "Available",
+  كمية: "qty",
+  "أدخل كمية الإشعار لبند واحد على الأقل": "Enter a note quantity for at least one line",
+  "كمية الإشعار أكبر من المتاح": "The note quantity exceeds what is available",
+  "النسبة من 1 إلى 100": "The percentage must be from 1 to 100",
+  "قيمة الإشعار أكبر من المتبقي للبند": "The note amount exceeds the line's remaining amount",
+  المتبقي: "Remaining",
+  "الإشعار أكبر من رصيد الفاتورة": "The note exceeds the invoice balance",
 };
 
 type AccountingAccount = {
@@ -242,7 +264,27 @@ type CreditNoteItem = {
   quantity: number;
   unitPrice: number;
   taxPercent: number;
+  // إشعار دائن من بنود الفاتورة: خصم البند بنسبة الكمية، ورقم البند في الفاتورة والنسبة من السعر
+  discount?: number;
+  sourceLine?: number;
+  sourceQuantity?: number;
+  sourceUnitPrice?: number;
+  percent?: number;
 };
+
+// بند الفاتورة الأصلية كما حُفظ (للعرض فقط في الإشعار الدائن)
+type OriginalInvoiceLine = {
+  index: number;
+  description: string;
+  accountCode: string;
+  quantity: number;
+  unitPrice: number;
+  discount: number;
+  net: number;
+};
+
+// ما يُدخله المستخدم لكل بند: الكمية المُشعَر بها ونسبتها من سعر الوحدة
+type CreditLineInput = { quantity: string; percent: string };
 
 type SavedCreditNote = {
   id: string;
@@ -275,7 +317,61 @@ type OriginalInvoice = {
   total: number;
   adjustedTotal: number;
   zatcaStatus: string;
+  lines: OriginalInvoiceLine[];
 };
+
+const toAmount = (value: unknown) => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+};
+
+/** بنود الفاتورة الأصلية من عمود items (المحفوظ هو ما رُحّل وأُرسل للهيئة) */
+const parseInvoiceLines = (value: unknown): OriginalInvoiceLine[] =>
+  (Array.isArray(value) ? value : [])
+    .map((raw, index) => {
+      const row = (raw ?? {}) as Record<string, unknown>;
+      const quantity = toAmount(row.quantity);
+      const unitPrice = toAmount(row.unitPrice);
+      const discount = Math.max(toAmount(row.discount), 0);
+      return {
+        index,
+        description: String(row.description ?? row.name ?? "").trim(),
+        accountCode: String(row.accountCode ?? "").trim(),
+        quantity,
+        unitPrice,
+        discount,
+        net: roundHalala(quantity * unitPrice - discount),
+      };
+    })
+    .filter((line) => line.description && line.quantity > 0 && line.unitPrice > 0);
+
+/** بند الإشعار من بند الفاتورة: الكمية المُشعَر بها، وسعر الوحدة × النسبة، وخصم البند بنسبة الكمية والنسبة */
+const creditItemFromLine = (
+  line: OriginalInvoiceLine,
+  quantity: number,
+  percent: number,
+  fallbackAccount: string,
+): CreditNoteItem => {
+  // الإرجاع بسعر الفاتورة نفسه؛ التخفيض بنسبة من السعر مقرّبًا إلى هللة
+  const unitPrice = percent >= 100 ? line.unitPrice : roundHalala((line.unitPrice * percent) / 100);
+  const discount = line.discount > 0 ? roundHalala((line.discount * quantity * percent) / (line.quantity * 100)) : 0;
+  return {
+    id: `line-${line.index}`,
+    description: line.description,
+    account: line.accountCode || fallbackAccount,
+    quantity,
+    unitPrice,
+    taxPercent: 15,
+    ...(discount > 0 ? { discount } : {}),
+    sourceLine: line.index,
+    sourceQuantity: line.quantity,
+    sourceUnitPrice: line.unitPrice,
+    percent,
+  };
+};
+
+const itemNet = (item: CreditNoteItem) =>
+  Number(item.quantity) * Number(item.unitPrice) - (Number(item.discount) || 0);
 
 type CreditNoteForm = {
   noteNumber: string;
@@ -363,6 +459,8 @@ export default function SalesCreditNote() {
   const [form, setForm] = useState<CreditNoteForm>(() =>
     createEmptyForm(START_NUMBER),
   );
+  // الإشعار الدائن على فاتورة لها بنود: الكمية والنسبة لكل بند (المفتاح رقم البند في الفاتورة)
+  const [creditLines, setCreditLines] = useState<Record<number, CreditLineInput>>({});
 
   useEffect(() => {
     const load = async () => {
@@ -377,7 +475,7 @@ export default function SalesCreditNote() {
             .order("created_at", { ascending: false }),
           supabase
             .from("sales_invoices")
-            .select("id, customer, total, adjusted_total, accounting_status, zatca_status, uuid, zatca_phase")
+            .select("id, customer, total, adjusted_total, accounting_status, zatca_status, uuid, zatca_phase, items")
             .eq("accounting_status", "posted")
             .order("date", { ascending: false }),
           supabase
@@ -445,6 +543,7 @@ export default function SalesCreditNote() {
             id: String(row.id),
             customer: String(row.customer || ""),
             zatcaStatus: String(row.zatca_status ?? ""),
+            lines: parseInvoiceLines(row.items),
             total:
               Number(String(row.total || "0").replace(/[^0-9.-]/g, "")) || 0,
             adjustedTotal:
@@ -487,13 +586,74 @@ export default function SalesCreditNote() {
     load();
   }, []);
 
+  const selectedInvoice = invoices.find((invoice) => invoice.id === form.originalInvoiceId);
+  // الإشعار الدائن من بنود الفاتورة (البنود مقفلة، والمدخل الكمية والنسبة)؛ المدين أو الفاتورة بلا بنود: بنود حرة
+  const fromInvoiceLines =
+    form.noteType === "sales_credit" && Boolean(selectedInvoice) && (selectedInvoice?.lines.length ?? 0) > 0;
+  // ما أُشعر به سابقًا لكل بند (الإشعارات الدائنة المرتبطة بالبنود)، وما لا يُعرف بنده
+  const previousCredits = useMemo(() => {
+    const byLine = new Map<number, { quantity: number; amount: number }>();
+    let unlinkedAmount = 0;
+    for (const note of savedNotes) {
+      if (note.noteType !== "sales_credit" || note.originalInvoiceId !== form.originalInvoiceId) continue;
+      for (const item of note.items ?? []) {
+        const amount = itemNet(item);
+        if (typeof item.sourceLine === "number") {
+          const current = byLine.get(item.sourceLine) ?? { quantity: 0, amount: 0 };
+          // الكمية المُرجعة = المُشعَر بها بكامل السعر؛ تخفيض السعر لا يرجع كمية
+          if ((Number(item.percent) || 100) >= 100) current.quantity += Number(item.quantity) || 0;
+          current.amount += amount;
+          byLine.set(item.sourceLine, current);
+        } else {
+          unlinkedAmount += amount;
+        }
+      }
+    }
+    return { byLine, unlinkedAmount };
+  }, [savedNotes, form.originalInvoiceId]);
+  const lineAvailable = (line: OriginalInvoiceLine) => {
+    const previous = previousCredits.byLine.get(line.index);
+    return {
+      quantity: Math.max(line.quantity - (previous?.quantity ?? 0), 0),
+      amount: Math.max(roundHalala(line.net - (previous?.amount ?? 0)), 0),
+    };
+  };
+  const invoiceLineItems = useMemo(() => {
+    if (!fromInvoiceLines || !selectedInvoice) return [] as CreditNoteItem[];
+    return selectedInvoice.lines
+      .map((line) => {
+        const input = creditLines[line.index];
+        const quantity = Number(input?.quantity) || 0;
+        const percent = input?.percent === undefined || input.percent === "" ? 100 : Number(input.percent) || 0;
+        if (!(quantity > 0) || !(percent > 0)) return null;
+        return creditItemFromLine(line, quantity, percent, defaultRevenueAccount);
+      })
+      .filter((item): item is CreditNoteItem => item !== null);
+  }, [fromInvoiceLines, selectedInvoice, creditLines, defaultRevenueAccount]);
+  const effectiveItems = fromInvoiceLines ? invoiceLineItems : form.items;
   const subtotal = useMemo(
-    () =>
-      form.items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
-    [form.items],
+    () => effectiveItems.reduce((sum, item) => sum + itemNet(item), 0),
+    [effectiveItems],
   );
   const tax = useMemo(() => subtotal * 0.15, [subtotal]);
   const total = useMemo(() => subtotal + tax, [subtotal, tax]);
+  const setCreditLine = (index: number, changes: Partial<CreditLineInput>) =>
+    setCreditLines((current) => ({
+      ...current,
+      [index]: { quantity: current[index]?.quantity ?? "", percent: current[index]?.percent ?? "100", ...changes },
+    }));
+  // إرجاع كامل: كل بند بكميته المتبقية وبكامل السعر
+  const creditAllLines = () => {
+    if (!selectedInvoice) return;
+    const next: Record<number, CreditLineInput> = {};
+    for (const line of selectedInvoice.lines) {
+      const available = lineAvailable(line);
+      if (available.quantity > 0 && available.amount > 0) {
+        next[line.index] = { quantity: String(available.quantity), percent: "100" };
+      }
+    }
+    setCreditLines(next);
+  };
 
   const updateItem = (
     id: string,
@@ -528,6 +688,7 @@ export default function SalesCreditNote() {
 
   const createNewNote = () => {
     requestIdRef.current = crypto.randomUUID();
+    setCreditLines({});
     const nextForm = createEmptyForm(nextSequence);
     nextForm.items = nextForm.items.map((item) => ({
       ...item,
@@ -555,9 +716,52 @@ export default function SalesCreditNote() {
     if (total <= 0) {
       toast({
         title: t("مبلغ الإشعار غير صحيح"),
-        description: t("أضف بنداً بقيمة أكبر من صفر"),
+        description: t(
+          fromInvoiceLines ? "أدخل كمية الإشعار لبند واحد على الأقل" : "أضف بنداً بقيمة أكبر من صفر",
+        ),
       });
       return;
+    }
+    // الإشعار الدائن من البنود: لا يتجاوز كمية البند ولا قيمته بعد ما أُشعر به سابقًا، ولا رصيد الفاتورة
+    if (fromInvoiceLines && selectedInvoice) {
+      for (const line of selectedInvoice.lines) {
+        const item = invoiceLineItems.find((candidate) => candidate.sourceLine === line.index);
+        if (!item) continue;
+        const available = lineAvailable(line);
+        const percent = Number(item.percent) || 100;
+        if (item.quantity > line.quantity + 1e-9 || (percent >= 100 && item.quantity > available.quantity + 1e-9)) {
+          toast({
+            title: t("كمية الإشعار أكبر من المتاح"),
+            description: `${line.description} — ${t("المتاح")}: ${formatNumber(percent >= 100 ? available.quantity : line.quantity)}`,
+            variant: "destructive",
+          });
+          return;
+        }
+        if (percent > 100) {
+          toast({
+            title: t("النسبة من 1 إلى 100"),
+            description: line.description,
+            variant: "destructive",
+          });
+          return;
+        }
+        if (itemNet(item) > available.amount + 0.005) {
+          toast({
+            title: t("قيمة الإشعار أكبر من المتبقي للبند"),
+            description: `${line.description} — ${t("المتبقي")}: ${formatNumber(available.amount, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+      if (total > selectedInvoice.adjustedTotal + 0.01) {
+        toast({
+          title: t("الإشعار أكبر من رصيد الفاتورة"),
+          description: `${t("الرصيد")}: ${formatNumber(selectedInvoice.adjustedTotal, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          variant: "destructive",
+        });
+        return;
+      }
     }
     if (!form.reason.trim()) {
       toast({
@@ -575,7 +779,7 @@ export default function SalesCreditNote() {
       });
       return;
     }
-    if (form.items.some((item) => !item.account)) {
+    if (effectiveItems.some((item) => !item.account)) {
       toast({
         title: t("الحساب المحاسبي مطلوب"),
         description: t("اختر حساب الإيراد لكل بند من شجرة الحسابات"),
@@ -584,7 +788,7 @@ export default function SalesCreditNote() {
     }
     // نفس شروط دالة ZATCA قبل الإرسال: وصف وكمية وسعر أكبر من صفر لكل بند
     if (
-      form.items.some(
+      effectiveItems.some(
         (item) =>
           !item.description.trim() ||
           !(Number(item.quantity) > 0) ||
@@ -599,7 +803,7 @@ export default function SalesCreditNote() {
       return;
     }
     if (
-      form.items.some((item) => ZATCA_SYNTHETIC_MARKER.test(item.description))
+      effectiveItems.some((item) => ZATCA_SYNTHETIC_MARKER.test(item.description))
     ) {
       toast({
         title: t("نص اختباري في الإشعار"),
@@ -650,7 +854,7 @@ export default function SalesCreditNote() {
       return;
     }
 
-    const cleanedItems = form.items.filter(
+    const cleanedItems = effectiveItems.filter(
       (item) =>
         item.description.trim() || item.account.trim() || item.unitPrice > 0,
     );
@@ -827,6 +1031,7 @@ export default function SalesCreditNote() {
         account: defaultRevenueAccount,
       }));
       setForm(nextForm);
+      setCreditLines({});
       setMode("list");
       toast({
         title:
@@ -1260,6 +1465,7 @@ export default function SalesCreditNote() {
                           customer: invoice?.customer || "",
                           reference: e.target.value,
                         });
+                        setCreditLines({});
                       }}
                       className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm"
                     >
@@ -1347,6 +1553,116 @@ export default function SalesCreditNote() {
                 )}
               </p>
 
+              {fromInvoiceLines && selectedInvoice ? (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-[12px] text-muted-foreground">
+                      {t("بنود الفاتورة كما صدرت (لا تُعدَّل). أدخل الكمية التي يشملها الإشعار، والنسبة من سعر الوحدة: 100% إرجاع، وأقل منها تخفيض في السعر.")}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={creditAllLines}
+                      className="rounded-md border border-border bg-background px-3 py-1.5 text-[12px] font-semibold hover:bg-muted/40"
+                    >
+                      {t("إرجاع كامل الكميات المتبقية")}
+                    </button>
+                  </div>
+                  {previousCredits.unlinkedAmount > 0.005 && (
+                    <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+                      {t("على الفاتورة إشعارات دائنة سابقة غير مرتبطة بالبنود")}:{" "}
+                      {formatNumber(previousCredits.unlinkedAmount, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}{" "}
+                      {t("﷼")} — {t("راجع الكميات قبل الحفظ")}
+                    </p>
+                  )}
+                  <div className="overflow-x-auto">
+                    <table
+                      className={`w-full min-w-[980px] text-sm ${direction === "rtl" ? "text-right" : "text-left"}`}
+                    >
+                      <thead>
+                        <tr className="bg-muted/40 text-[12px]">
+                          <th className="px-3 py-2">{t("الوصف")}</th>
+                          <th className="px-3 py-2">{t("الكمية في الفاتورة")}</th>
+                          <th className="px-3 py-2">{t("سعر الوحدة")}</th>
+                          <th className="px-3 py-2">{t("الخصم")}</th>
+                          <th className="px-3 py-2">{t("قيمة البند")}</th>
+                          <th className="px-3 py-2">{t("أُشعر به سابقًا")}</th>
+                          <th className="px-3 py-2">{t("كمية الإشعار")}</th>
+                          <th className="px-3 py-2">{t("النسبة من السعر %")}</th>
+                          <th className="px-3 py-2">{t("قيمة الإشعار")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedInvoice.lines.map((line) => {
+                          const input = creditLines[line.index];
+                          const previous = previousCredits.byLine.get(line.index);
+                          const available = lineAvailable(line);
+                          const item = invoiceLineItems.find((candidate) => candidate.sourceLine === line.index);
+                          const exhausted = available.amount <= 0.005;
+                          return (
+                            <tr key={line.index} className={`border-t border-border ${exhausted ? "bg-muted/30 text-muted-foreground" : ""}`}>
+                              <td className="px-3 py-2">
+                                <div className="font-medium">{line.description}</div>
+                                {line.accountCode && (
+                                  <div className="text-[11px] text-muted-foreground" dir="ltr">{line.accountCode}</div>
+                                )}
+                              </td>
+                              <td className="px-3 py-2">{formatNumber(line.quantity)}</td>
+                              <td className="px-3 py-2">
+                                {formatNumber(line.unitPrice, { minimumFractionDigits: 2, maximumFractionDigits: 4 })}
+                              </td>
+                              <td className="px-3 py-2">
+                                {formatNumber(line.discount, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-3 py-2">
+                                {formatNumber(line.net, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </td>
+                              <td className="px-3 py-2 text-[12px]">
+                                {previous
+                                  ? `${formatNumber(previous.amount, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${previous.quantity > 0 ? ` (${t("كمية")} ${formatNumber(previous.quantity)})` : ""}`
+                                  : "—"}
+                              </td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={line.quantity}
+                                  step="any"
+                                  value={input?.quantity ?? ""}
+                                  disabled={exhausted}
+                                  placeholder="0"
+                                  onChange={(e) => setCreditLine(line.index, { quantity: e.target.value })}
+                                  className="h-9 w-24 rounded-md border border-border bg-background px-2 disabled:bg-muted/40"
+                                />
+                                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                  {t("المتاح")}: {formatNumber(available.quantity)}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={100}
+                                  step="any"
+                                  value={input?.percent ?? "100"}
+                                  disabled={exhausted}
+                                  onChange={(e) => setCreditLine(line.index, { percent: e.target.value })}
+                                  className="h-9 w-20 rounded-md border border-border bg-background px-2 disabled:bg-muted/40"
+                                />
+                              </td>
+                              <td className="px-3 py-2 font-semibold">
+                                {item
+                                  ? `${formatNumber(itemNet(item), { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${t("﷼")}`
+                                  : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : (
+              <>
               <div className="overflow-x-auto">
                 <table
                   className={`w-full min-w-[900px] text-sm ${direction === "rtl" ? "text-right" : "text-left"}`}
@@ -1363,7 +1679,7 @@ export default function SalesCreditNote() {
                   </thead>
                   <tbody>
                     {form.items.map((item) => {
-                      const lineTotal = item.quantity * item.unitPrice;
+                      const lineTotal = itemNet(item);
                       return (
                         <tr key={item.id} className="border-t border-border">
                           <td className="px-3 py-2">
@@ -1465,6 +1781,8 @@ export default function SalesCreditNote() {
                   {t("أضف بند")}
                 </button>
               </div>
+              </>
+              )}
             </div>
 
             <div className="grid gap-6 lg:grid-cols-[1fr_320px]">

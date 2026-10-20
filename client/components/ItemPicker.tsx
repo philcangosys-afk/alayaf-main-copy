@@ -27,7 +27,8 @@ const levelClass = {
 
 function useMoney() {
   const { formatNumber } = useI18n();
-  return (value: number) => formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // S18: الأسعار قبل الضريبة بأربع خانات (السعر الشامل يعود كما أُدخل)
+  return (value: number) => formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 }
 
 function useQuantity() {

@@ -2,7 +2,9 @@ import Layout from "@/components/Layout";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { useEffect, useState, useMemo } from "react";
-import { checkPerm } from "@/lib/authSession";
+import { checkPerm, hotelAccessAllowed, permissionLevelAny } from "@/lib/authSession";
+import { useCompany } from "@/lib/companyContext";
+import { hasCompanyModule, moduleForPath } from "@/lib/companyModules";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import { supabase } from "@/lib/supabaseClient";
 import { selectAllRows } from "@/lib/ledgerData";
@@ -23,6 +25,7 @@ import {
   Activity,
   BarChart3,
   Clock,
+  BedDouble,
 } from "lucide-react";
 
 /* ── Types ── */
@@ -52,6 +55,7 @@ const ALL_MODULES = [
   { title: "المشتريات", description: "طلبات الشراء والفواتير والتقارير", href: "/purchases", permKey: "module.purchases", icon: ShoppingCart, gradient: "from-violet-500 to-purple-600", shadow: "shadow-violet-500/20" },
   { title: "الموارد البشرية", description: "إدارة الموظفين والرواتب والحضور", href: "/hr", permKey: "module.hr", icon: Users, gradient: "from-emerald-500 to-teal-600", shadow: "shadow-emerald-500/20" },
   { title: "إدارة العملاء", description: "قاعدة بيانات العملاء والتفاعلات", href: "/crm", permKey: "module.crm", icon: Users, gradient: "from-amber-500 to-orange-600", shadow: "shadow-amber-500/20" },
+  { title: "الحجوزات", description: "حجز الغرف والشقق والاستقبال والمغادرة", href: "/hotel", permKey: "module.hotel", icon: BedDouble, gradient: "from-rose-500 to-amber-500", shadow: "shadow-rose-500/20" },
 ];
 
 /** قراءة المبالغ المخزنة نصًا مثل "ريال 17.25" مع الإبقاء على الإشارة السالبة. */
@@ -70,12 +74,20 @@ function statusClasses(status: string) {
 export default function Dashboard() {
   const { permissions: livePerms } = useRolePermissions();
   const { t, formatDate, formatNumber } = useI18n();
+  // S19: أقسام المنشأة في باقتها
+  const { modules: companyModules } = useCompany();
+  const accountingOn = hasCompanyModule(companyModules, "accounting");
+  const hrOn = hasCompanyModule(companyModules, "hr");
   const modules = useMemo(() => {
-    return ALL_MODULES.filter((m) => checkPerm(livePerms, m.permKey));
-  }, [livePerms]);
-  const canViewSales = checkPerm(livePerms, "sales.invoices", "sales.invoices.view", "module.sales");
-  const canViewPurchases = checkPerm(livePerms, "purchases.invoices", "purchases.invoices.view", "module.purchases");
-  const canViewCustomers = checkPerm(livePerms, "crm.customers", "crm.customers.view", "module.crm");
+    return ALL_MODULES.filter((m) =>
+      hasCompanyModule(companyModules, moduleForPath(m.href))
+      && (m.href === "/hotel" ? hotelAccessAllowed(livePerms) : checkPerm(livePerms, m.permKey)));
+  }, [livePerms, companyModules]);
+  const canViewSales = accountingOn && checkPerm(livePerms, "sales.invoices", "sales.invoices.view", "module.sales");
+  const canViewPurchases = accountingOn && checkPerm(livePerms, "purchases.invoices", "purchases.invoices.view", "module.purchases");
+  const canViewCustomers = accountingOn && checkPerm(livePerms, "crm.customers", "crm.customers.view", "module.crm");
+  const canViewHotel = hasCompanyModule(companyModules, "hotel") && hotelAccessAllowed(livePerms);
+  const canBookHotel = canViewHotel && permissionLevelAny(livePerms, ["hotel.reservations", "module.hotel"]) === "manage";
 
   const [kpis, setKpis] = useState<KpiData>({ totalSales: 0, totalPurchases: 0, invoiceCount: 0, activeCustomers: 0 });
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
@@ -133,10 +145,12 @@ export default function Dashboard() {
           : 0;
         // عدّ فقط بلا تنزيل الصفوف: كل صيغ الحالة المعلقة (فارغة / معلق / معلقة / pending)
         const pendingFilter = `status.is.null,status.eq."",status.in.(${PENDING_STATUSES.map((value) => `"${value}"`).join(",")})`;
-        const leavesCount = await supabase
-          .from("leave_requests")
-          .select("id", { count: "exact", head: true })
-          .or(pendingFilter);
+        const leavesCount = hrOn
+          ? await supabase
+            .from("leave_requests")
+            .select("id", { count: "exact", head: true })
+            .or(pendingFilter)
+          : { error: null, count: 0 };
         if (leavesCount.error) console.error("Dashboard pending leaves count error:", leavesCount.error);
         const pendingLeaves = leavesCount.error ? 0 : (leavesCount.count ?? 0);
 
@@ -152,7 +166,7 @@ export default function Dashboard() {
       }
     };
     load();
-  }, [canViewSales, canViewPurchases, canViewCustomers]);
+  }, [canViewSales, canViewPurchases, canViewCustomers, hrOn]);
 
   const kpiCards = [
     {
@@ -205,16 +219,21 @@ export default function Dashboard() {
             </div>
             <h1 className="text-3xl font-extrabold leading-tight">{t("أهلاً وسهلاً بك")}</h1>
             <p className="mt-2 max-w-md text-[15px] text-white/70 leading-relaxed">
-              {t("إليك ملخص أداء عملك اليوم — تابع المبيعات والمشتريات وحالة الفواتير في مكان واحد.")}
+              {t(accountingOn
+                ? "إليك ملخص أداء عملك اليوم — تابع المبيعات والمشتريات وحالة الفواتير في مكان واحد."
+                : "إليك ملخص منشأتك اليوم في مكان واحد.")}
             </p>
           </div>
           <div className="flex gap-3">
-            <Link to="/sales/invoices" className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-[hsl(224,76%,38%)] shadow-lg shadow-black/10 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200">
+            {canViewSales && <Link to="/sales/invoices" className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-2.5 text-sm font-bold text-[hsl(224,76%,38%)] shadow-lg shadow-black/10 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200">
               <Plus className="h-4 w-4" /> {t("فاتورة جديدة")}
-            </Link>
-            <Link to="/sales" className="inline-flex items-center gap-2 rounded-xl bg-white/15 backdrop-blur-sm border border-white/20 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/25 transition-all duration-200">
+            </Link>}
+            {canViewSales && <Link to="/sales" className="inline-flex items-center gap-2 rounded-xl bg-white/15 backdrop-blur-sm border border-white/20 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/25 transition-all duration-200">
               <BarChart3 className="h-4 w-4" /> {t("التقارير")}
-            </Link>
+            </Link>}
+            {canViewHotel && <Link to="/hotel" className="inline-flex items-center gap-2 rounded-xl bg-white/15 backdrop-blur-sm border border-white/20 px-5 py-2.5 text-sm font-semibold text-white hover:bg-white/25 transition-all duration-200">
+              <BedDouble className="h-4 w-4" /> {t("لوحة الاستقبال")}
+            </Link>}
           </div>
         </div>
       </section>
@@ -337,15 +356,18 @@ export default function Dashboard() {
               <h3 className="text-sm font-bold text-foreground">{t("إجراءات سريعة")}</h3>
             </div>
             <div className="flex flex-col gap-2.5">
-              <Link to="/sales/invoices" className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-l from-blue-600 to-blue-500 px-4 py-3 text-[13px] font-bold text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200">
+              {accountingOn && <Link to="/sales/invoices" className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-l from-blue-600 to-blue-500 px-4 py-3 text-[13px] font-bold text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-200">
                 <Plus className="h-4 w-4" /> {t("إنشاء فاتورة جديدة")}
-              </Link>
-              <Link to="/purchases/orders" className="flex items-center justify-center gap-2 rounded-xl border-2 border-border/60 bg-white px-4 py-3 text-[13px] font-bold text-foreground hover:bg-muted/40 hover:border-border transition-all duration-200">
+              </Link>}
+              {accountingOn && <Link to="/purchases/orders" className="flex items-center justify-center gap-2 rounded-xl border-2 border-border/60 bg-white px-4 py-3 text-[13px] font-bold text-foreground hover:bg-muted/40 hover:border-border transition-all duration-200">
                 <ShoppingCart className="h-4 w-4 text-muted-foreground" /> {t("طلب شراء جديد")}
-              </Link>
-              <Link to="/hr/employees" className="flex items-center justify-center gap-2 rounded-xl border-2 border-border/60 bg-white px-4 py-3 text-[13px] font-bold text-foreground hover:bg-muted/40 hover:border-border transition-all duration-200">
+              </Link>}
+              {canBookHotel && <Link to="/hotel/reservations/new" className="flex items-center justify-center gap-2 rounded-xl border-2 border-border/60 bg-white px-4 py-3 text-[13px] font-bold text-foreground hover:bg-muted/40 hover:border-border transition-all duration-200">
+                <BedDouble className="h-4 w-4 text-muted-foreground" /> {t("حجز جديد")}
+              </Link>}
+              {hrOn && <Link to="/hr/employees" className="flex items-center justify-center gap-2 rounded-xl border-2 border-border/60 bg-white px-4 py-3 text-[13px] font-bold text-foreground hover:bg-muted/40 hover:border-border transition-all duration-200">
                 <Users className="h-4 w-4 text-muted-foreground" /> {t("إدارة الموظفين")}
-              </Link>
+              </Link>}
             </div>
           </div>
         </div>

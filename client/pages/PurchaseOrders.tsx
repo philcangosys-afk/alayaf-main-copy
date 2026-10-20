@@ -14,8 +14,10 @@ import {
   Loader2,
   FileText,
   Printer,
+  Download,
 } from "lucide-react";
 import { cn, escapeHtml, riyadhDateString, SAUDI_STANDARD_VAT_RATE } from "@/lib/utils";
+import { openDocumentOutput, type DocumentOutputMode } from "@/lib/pdfDownload";
 import { useI18n } from "@/i18n";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
@@ -470,8 +472,9 @@ export default function PurchaseOrders() {
     }
   };
 
-  const handlePrintPdf = (order: PurchaseOrderRow) => {
-    const printWindow = window.open("", "_blank");
+  // S18: «PDF» يُحمَّل ملفًا مباشرة، و«طباعة» تفتح نافذة الطباعة (المستند نفسه)
+  const handlePrintPdf = (order: PurchaseOrderRow, mode: DocumentOutputMode = "download") => {
+    const printWindow = openDocumentOutput(mode, order.referenceNo || order.id);
     if (!printWindow) return;
 
     const vendorInfo = vendors.find((vendor) => vendor.id === order.vendorId);
@@ -602,7 +605,8 @@ export default function PurchaseOrders() {
             onView={(order) => { setSelectedOrder(order); setView("details"); }}
             onEdit={(order) => { setSelectedOrder(order); setView("edit"); }}
             onDelete={handleDelete}
-            onPrintPdf={handlePrintPdf}
+            onPrintPdf={(order) => handlePrintPdf(order, "download")}
+            onPrint={(order) => handlePrintPdf(order, "print")}
             onConvert={(order) => void handleConvert(order)}
           />
         )}
@@ -627,7 +631,8 @@ export default function PurchaseOrders() {
             converting={converting}
             onBack={() => setView("list")}
             onEdit={() => { if (!selectedOrder.invoiceId) setView("edit"); }}
-            onPrintPdf={handlePrintPdf}
+            onPrintPdf={(order) => handlePrintPdf(order, "download")}
+            onPrint={(order) => handlePrintPdf(order, "print")}
             onConvert={(order) => void handleConvert(order)}
           />
         )}
@@ -677,6 +682,7 @@ function OrdersList({
   onEdit,
   onDelete,
   onPrintPdf,
+  onPrint,
   onConvert,
 }: {
   orders: PurchaseOrderRow[];
@@ -690,6 +696,7 @@ function OrdersList({
   onEdit: (o: PurchaseOrderRow) => void;
   onDelete: (o: PurchaseOrderRow) => void;
   onPrintPdf: (o: PurchaseOrderRow) => void;
+  onPrint: (o: PurchaseOrderRow) => void;
   onConvert: (o: PurchaseOrderRow) => void;
 }) {
   const { t, formatDate, formatNumber } = useI18n();
@@ -773,11 +780,19 @@ function OrdersList({
                 {!order.invoiceId && <ActionBtn icon={Edit} label={t("تعديل")} color="emerald" onClick={() => onEdit(order)} />}
                 {!order.invoiceId && <ActionBtn icon={Trash2} label={t("حذف")} color="red" onClick={() => onDelete(order)} />}
                 <button
-                  title={t("طباعة PDF")}
+                  title={t("تحميل PDF")}
                   onClick={() => onPrintPdf(order)}
                   className="px-2.5 py-1.5 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors text-xs font-semibold"
                 >
                   PDF
+                </button>
+                <button
+                  title={t("طباعة")}
+                  aria-label={t("طباعة")}
+                  onClick={() => onPrint(order)}
+                  className="px-2 py-1.5 text-slate-600 border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  <Printer className="h-3.5 w-3.5" />
                 </button>
                 {canConvert(order) && (
                   <ActionBtn
@@ -830,6 +845,7 @@ function OrderDetails({
   onBack,
   onEdit,
   onPrintPdf,
+  onPrint,
   onConvert,
 }: {
   order: PurchaseOrderRow;
@@ -840,6 +856,7 @@ function OrderDetails({
   onBack: () => void;
   onEdit: () => void;
   onPrintPdf: (o: PurchaseOrderRow) => void;
+  onPrint: (o: PurchaseOrderRow) => void;
   onConvert: (o: PurchaseOrderRow) => void;
 }) {
   const { t, direction, formatDate, formatNumber } = useI18n();
@@ -872,7 +889,10 @@ function OrderDetails({
         </div>
         <div className="flex gap-2">
           <button onClick={() => onPrintPdf(order)} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50 flex items-center gap-2">
-            <Printer className="h-4 w-4" /> {t("طباعة PDF")}
+            <Download className="h-4 w-4" /> {t("تحميل PDF")}
+          </button>
+          <button onClick={() => onPrint(order)} className="px-4 py-2 bg-white border border-slate-300 text-slate-700 text-sm rounded hover:bg-slate-50 flex items-center gap-2">
+            <Printer className="h-4 w-4" /> {t("طباعة")}
           </button>
           {canConvert && (
             <button

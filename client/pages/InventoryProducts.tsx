@@ -6,7 +6,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { selectAllRows } from "@/lib/ledgerData";
 import { inventoryErrorText } from "@/lib/inventoryErrors";
-import { parseCatalog, stockLevel, type CatalogItem } from "@/lib/itemCatalog";
+import { parseCatalog, stockIn, stockLevel, type CatalogItem, type CatalogWarehouse } from "@/lib/itemCatalog";
 
 type Account = { code: string; name_ar: string; parent_code: string | null };
 type Product = {
@@ -20,13 +20,16 @@ type Product = {
   cogsAccountCode: string;
   revenueAccountCode: string;
   active: boolean;
-  // S17: الأسعار والبيانات
+  // S17: الأسعار والبيانات (الأسعار قبل الضريبة دائمًا)
   salePrice: number;
   purchasePrice: number;
   description: string;
   barcode: string;
   reorderLevel: number;
   purchaseAccountCode: string;
+  // S18: طريقة إدخال السعر ونسبة الضريبة
+  pricesIncludeVat: boolean;
+  vatRate: number;
 };
 type TypeFilter = "all" | "product" | "service";
 
@@ -35,20 +38,31 @@ type TypeFilter = "all" | "product" | "service";
 const DEFAULT_INVENTORY_ACCOUNTS = ["1151"];
 const DEFAULT_COGS_ACCOUNTS = ["513", "511"];
 const DEFAULT_REVENUE_ACCOUNTS = ["411"];
+// الحساب المقابل للرصيد الافتتاحي (حقوق الملكية): رأس المال، وإلا أول حساب طرفي من الفئة 3
+const DEFAULT_OPENING_OFFSET_ACCOUNTS = ["321", "331"];
 // مستخدم المخزون فقط قد لا يقرأ دليل الحسابات: تُستخدم الحسابات الافتراضية السابقة حتى يستطيع الحفظ
 const LEGACY_DEFAULT_ACCOUNTS = { inventory: "1151", cogs: "511", revenue: "411" };
+// نسب الضريبة المعروضة (فواتير المبيعات بنسبة 15% دائمًا)
+const VAT_RATE_OPTIONS = [15, 0];
 
 const toNumber = (value: unknown) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
 };
+const round2 = (value: number) => Math.round(value * 100) / 100;
+const round4 = (value: number) => Math.round(value * 10000) / 10000;
 // حقل رقمي يُحفظ نصًا أثناء الكتابة (يقبل الفاصلة العشرية) ويُرسل رقمًا
-const numberText = (value: number) => (value ? String(value) : "");
+const numberText = (value: number) => (value ? String(round4(value)) : "");
+const parseInput = (value: string) => (value.trim() === "" ? 0 : Number(value));
+/** السعر الشامل من السعر قبل الضريبة (هللتان)، والعكس بأربع خانات كما يحفظه الخادم */
+const grossOf = (net: number, rate: number) => round2(net * (1 + rate / 100));
+const netOf = (gross: number, rate: number) => round4(gross / (1 + rate / 100));
 
 export default function InventoryProducts() {
   const { t, direction, formatNumber } = useI18n();
   const [products, setProducts] = useState<Product[]>([]);
   const [stock, setStock] = useState<Map<string, CatalogItem> | null>(null);
+  const [warehouses, setWarehouses] = useState<CatalogWarehouse[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -66,20 +80,33 @@ export default function InventoryProducts() {
   const [cogsAccount, setCogsAccount] = useState("");
   const [revenueAccount, setRevenueAccount] = useState("");
   const [purchaseAccount, setPurchaseAccount] = useState("");
-  const [salePrice, setSalePrice] = useState("");
-  const [purchasePrice, setPurchasePrice] = useState("");
+  // الأسعار كما تُكتب: شاملة الضريبة إن كان المفتاح مفعّلًا، وإلا قبلها
+  const [salePrice, setSalePriceText] = useState("");
+  const [purchasePrice, setPurchasePriceText] = useState("");
+  // السعر قبل الضريبة الذي عُرض منه النص (تحميل أو تبديل المفتاح)؛ يُرسل كما هو ما لم يُكتب السعر من جديد
+  const [saleBaseNet, setSaleBaseNet] = useState<number | null>(null);
+  const [purchaseBaseNet, setPurchaseBaseNet] = useState<number | null>(null);
+  const setSalePrice = (text: string) => { setSalePriceText(text); setSaleBaseNet(null); };
+  const setPurchasePrice = (text: string) => { setPurchasePriceText(text); setPurchaseBaseNet(null); };
+  const [pricesIncludeVat, setPricesIncludeVat] = useState(false);
+  const [vatRate, setVatRate] = useState(15);
   const [barcode, setBarcode] = useState("");
   const [reorderLevel, setReorderLevel] = useState("");
   const [description, setDescription] = useState("");
   const [active, setActive] = useState(true);
+  // S18: رصيد افتتاحي من بطاقة الصنف (اختياري)
+  const [openingQuantity, setOpeningQuantity] = useState("");
+  const [openingWarehouse, setOpeningWarehouse] = useState("");
+  const [openingCost, setOpeningCost] = useState("");
+  const [openingOffset, setOpeningOffset] = useState("");
 
-  const money = (value: number) => formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const money = (value: number) => formatNumber(value, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
   const quantity = (value: number) => formatNumber(value, { maximumFractionDigits: 4 });
 
   const load = async () => {
     setLoading(true);
     setError("");
-    // select("*"): الأعمدة الجديدة (S17) تُقرأ إن وُجدت، والصفحة تعمل قبلها
+    // select("*"): الأعمدة الجديدة تُقرأ إن وُجدت، والصفحة تعمل قبلها
     const [productResult, accountResult, catalogResult] = await Promise.all([
       selectAllRows((from, to) => supabase.from("inventory_products").select("*").order("sku").order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("accounting_accounts").select("code, name_ar, parent_code").order("code").range(from, to)),
@@ -94,8 +121,10 @@ export default function InventoryProducts() {
     const allAccounts = (accountResult.error ? [] : accountResult.data ?? []) as Account[];
     setAccounts(allAccounts.filter((account) => !allAccounts.some((child) => child.parent_code === account.code)));
     setAccountsLoaded(true);
-    // الكميات المتوفرة من القائمة (S17)؛ قبلها أو بلا صلاحية يبقى العمود «—»
-    setStock(catalogResult.error ? null : new Map(parseCatalog(catalogResult.data).items.map((item) => [item.id, item] as const)));
+    // الكميات المتوفرة والمستودعات من القائمة؛ بلا صلاحية يبقى العمود «—»
+    const catalog = catalogResult.error ? null : parseCatalog(catalogResult.data);
+    setStock(catalog ? new Map(catalog.items.map((item) => [item.id, item] as const)) : null);
+    setWarehouses(catalog?.warehouses ?? []);
     setProducts((productResult.data ?? []).map((row) => ({
       id: String(row.id),
       sku: String(row.sku),
@@ -113,6 +142,8 @@ export default function InventoryProducts() {
       barcode: String(row.barcode ?? ""),
       reorderLevel: toNumber(row.reorder_level),
       purchaseAccountCode: String(row.purchase_account_code ?? ""),
+      pricesIncludeVat: row.prices_include_vat === true,
+      vatRate: row.vat_rate === null || row.vat_rate === undefined ? 15 : toNumber(row.vat_rate),
     })));
     setLoading(false);
   };
@@ -143,25 +174,37 @@ export default function InventoryProducts() {
   // أول حساب طرفي موجود من القائمة المفضلة، وإلا يبقى الاختيار فارغًا ليحدده المستخدم.
   // دليل غير مقروء (بلا صفوف): الحسابات الافتراضية السابقة 1151/511/411
   const defaultAccounts = useMemo(() => {
-    if (!accountsLoaded) return { inventory: "", cogs: "", revenue: "" };
-    if (accounts.length === 0) return LEGACY_DEFAULT_ACCOUNTS;
+    if (!accountsLoaded) return { inventory: "", cogs: "", revenue: "", opening: "" };
+    if (accounts.length === 0) return { ...LEGACY_DEFAULT_ACCOUNTS, opening: "" };
     const pick = (codes: string[]) => codes.find((code) => accounts.some((account) => account.code === code)) ?? "";
-    return { inventory: pick(DEFAULT_INVENTORY_ACCOUNTS), cogs: pick(DEFAULT_COGS_ACCOUNTS), revenue: pick(DEFAULT_REVENUE_ACCOUNTS) };
+    return {
+      inventory: pick(DEFAULT_INVENTORY_ACCOUNTS),
+      cogs: pick(DEFAULT_COGS_ACCOUNTS),
+      revenue: pick(DEFAULT_REVENUE_ACCOUNTS),
+      opening: pick(DEFAULT_OPENING_OFFSET_ACCOUNTS) || accounts.find((account) => account.code.startsWith("3"))?.code || "",
+    };
   }, [accounts, accountsLoaded]);
   // إن فُتح نموذج صنف جديد قبل اكتمال تحميل الدليل تُملأ الحسابات الفارغة عند وصوله
   useEffect(() => {
+    if (editingId !== undefined) setOpeningOffset((current) => current || defaultAccounts.opening);
     if (editingId !== null) return;
     setInventoryAccount((current) => current || defaultAccounts.inventory);
     setCogsAccount((current) => current || defaultAccounts.cogs);
     setRevenueAccount((current) => current || defaultAccounts.revenue);
   }, [defaultAccounts]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const resetOpening = () => {
+    setOpeningQuantity(""); setOpeningCost("");
+    setOpeningWarehouse(warehouses.length === 1 ? warehouses[0].id : "");
+    setOpeningOffset(defaultAccounts.opening);
+  };
   const reset = () => {
     setEditingId(undefined);
     setSku(""); setNameAr(""); setNameEn(""); setItemType("product"); setUnit("قطعة");
     setInventoryAccount(defaultAccounts.inventory); setCogsAccount(defaultAccounts.cogs); setRevenueAccount(defaultAccounts.revenue);
-    setPurchaseAccount(""); setSalePrice(""); setPurchasePrice(""); setBarcode(""); setReorderLevel(""); setDescription("");
-    setActive(true); setError("");
+    setPurchaseAccount(""); setSalePrice(""); setPurchasePrice(""); setPricesIncludeVat(false); setVatRate(15);
+    setBarcode(""); setReorderLevel(""); setDescription("");
+    setActive(true); setError(""); resetOpening();
   };
   const startNew = () => { reset(); setEditingId(null); };
   const startEdit = (product: Product) => {
@@ -169,38 +212,114 @@ export default function InventoryProducts() {
     setEditingId(product.id); setSku(product.sku); setNameAr(product.nameAr); setNameEn(product.nameEn);
     setItemType(product.itemType); setUnit(product.unit); setInventoryAccount(product.inventoryAccountCode || defaultAccounts.inventory);
     setCogsAccount(product.cogsAccountCode || defaultAccounts.cogs); setRevenueAccount(product.revenueAccountCode);
-    setPurchaseAccount(product.purchaseAccountCode); setSalePrice(numberText(product.salePrice)); setPurchasePrice(numberText(product.purchasePrice));
+    setPurchaseAccount(product.purchaseAccountCode);
+    // السعر يُعرض كما أُدخل: شاملًا إن كان الصنف بأسعار شاملة الضريبة
+    setPricesIncludeVat(product.pricesIncludeVat); setVatRate(product.vatRate);
+    const shown = (net: number) => (product.pricesIncludeVat ? grossOf(net, product.vatRate) : net);
+    setSalePriceText(numberText(shown(product.salePrice))); setSaleBaseNet(product.salePrice);
+    setPurchasePriceText(numberText(shown(product.purchasePrice))); setPurchaseBaseNet(product.purchasePrice);
     setBarcode(product.barcode); setReorderLevel(numberText(product.reorderLevel)); setDescription(product.description);
-    setActive(product.active); setError("");
+    setActive(product.active); setError(""); resetOpening();
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  const netPrice = (text: string, baseNet: number | null = null) => {
+    if (baseNet !== null) return baseNet;
+    const value = parseInput(text);
+    if (!Number.isFinite(value) || value < 0) return 0;
+    return pricesIncludeVat ? netOf(value, vatRate) : round4(value);
+  };
+  // مفتاح «شامل الضريبة»: السعر نفسه يُعرض بالطريقة الأخرى (لا يتغير السعر الفعلي قبل الضريبة)
+  const toggleIncludeVat = () => {
+    const next = !pricesIncludeVat;
+    const convert = (text: string, baseNet: number | null, setText: (value: string) => void, setBase: (value: number | null) => void) => {
+      const value = parseInput(text);
+      if (!Number.isFinite(value) || value <= 0) return;
+      const net = netPrice(text, baseNet);
+      setText(numberText(next ? grossOf(net, vatRate) : net));
+      setBase(net);
+    };
+    convert(salePrice, saleBaseNet, setSalePriceText, setSaleBaseNet);
+    convert(purchasePrice, purchaseBaseNet, setPurchasePriceText, setPurchaseBaseNet);
+    setPricesIncludeVat(next);
+  };
+  // تغيير النسبة: السعر المكتوب يبقى كما هو (الشامل يبقى شاملًا)
+  const changeVatRate = (rate: number) => {
+    if (pricesIncludeVat) { setSaleBaseNet(null); setPurchaseBaseNet(null); }
+    setVatRate(rate);
+  };
+
+  const editingProduct = editingId ? products.find((product) => product.id === editingId) : undefined;
+  const editingStock = editingId ? stock?.get(editingId) : undefined;
+  const openingWarehouseQuantity = editingStock && openingWarehouse ? stockIn(editingStock, openingWarehouse) : 0;
 
   const save = async () => {
     if (!nameAr.trim() || !unit.trim() || !revenueAccount || (itemType === "product" && (!inventoryAccount || !cogsAccount))) {
       setError(t("أكمل بيانات الصنف والحسابات المطلوبة"));
       return;
     }
-    const prices = [salePrice, purchasePrice, reorderLevel].map((value) => (value.trim() === "" ? 0 : Number(value)));
+    const prices = [salePrice, purchasePrice, reorderLevel].map(parseInput);
     if (prices.some((value) => !Number.isFinite(value) || value < 0)) {
       setError(t("الأسعار وحد إعادة الطلب أرقام موجبة أو صفر"));
       return;
     }
+    // تُرسل الأسعار قبل الضريبة (بأربع خانات)، والطريقة والنسبة لعرضها في البطاقة
+    const saleNet = netPrice(salePrice, saleBaseNet);
+    const purchaseNet = netPrice(purchasePrice, purchaseBaseNet);
+    // الرصيد الافتتاحي: كمية ومستودع وتكلفة وحدة (الافتراضي سعر الشراء قبل الضريبة) وحساب مقابل
+    const openingQty = itemType === "product" ? parseInput(openingQuantity) : 0;
+    const openingUnitCost = openingCost.trim() === "" ? purchaseNet : parseInput(openingCost);
+    if (!Number.isFinite(openingQty) || openingQty < 0) {
+      setError(t("الكمية الافتتاحية رقم موجب"));
+      return;
+    }
+    if (openingQty > 0) {
+      if (!active) { setError(t("الرصيد الافتتاحي لصنف نشط فقط")); return; }
+      if (!openingWarehouse) { setError(t("اختر مستودع الرصيد الافتتاحي")); return; }
+      if (!Number.isFinite(openingUnitCost) || openingUnitCost <= 0) { setError(t("أدخل تكلفة الوحدة للرصيد الافتتاحي (قبل الضريبة)")); return; }
+      if (!openingOffset) { setError(t("اختر الحساب المقابل للرصيد الافتتاحي")); return; }
+    }
     setBusy(true); setError("");
-    const { error: saveError } = await supabase.rpc("save_inventory_product", {
+    const { data: savedId, error: saveError } = await supabase.rpc("save_inventory_product", {
       p_id: editingId || null,
       p_product: {
         sku: sku.trim(), nameAr: nameAr.trim(), nameEn: nameEn.trim(), itemType, unit: unit.trim(),
         inventoryAccountCode: itemType === "product" ? inventoryAccount : null,
         cogsAccountCode: itemType === "product" ? cogsAccount : null,
         revenueAccountCode: revenueAccount, active,
-        salePrice: prices[0], purchasePrice: prices[1], reorderLevel: itemType === "product" ? prices[2] : 0,
+        salePrice: saleNet, purchasePrice: purchaseNet, pricesIncludeVat, vatRate,
+        reorderLevel: itemType === "product" ? prices[2] : 0,
         barcode: barcode.trim(), description: description.trim(),
         purchaseAccountCode: itemType === "service" ? purchaseAccount || null : null,
       },
     });
-    setBusy(false);
-    if (saveError) { setError(inventoryErrorText(saveError.message, t)); return; }
-    toast({ title: t(editingId ? "تم تحديث الصنف" : "تم إنشاء الصنف") });
+    if (saveError) { setBusy(false); setError(inventoryErrorText(saveError.message, t)); return; }
+    const productId = String(savedId ?? editingId ?? "");
+    if (openingQty > 0 && productId) {
+      const { data: opening, error: openingError } = await supabase.rpc("post_product_opening_stock", {
+        p_product_id: productId,
+        p_warehouse_id: openingWarehouse,
+        p_quantity: openingQty,
+        p_unit_cost: openingUnitCost,
+        p_offset_account_code: openingOffset,
+      });
+      setBusy(false);
+      if (openingError) {
+        // الصنف محفوظ: يبقى النموذج مفتوحًا عليه لتصحيح الرصيد الافتتاحي
+        await load();
+        setEditingId(productId);
+        setError(`${t("حُفظ الصنف، وتعذّر تسجيل الرصيد الافتتاحي")}: ${inventoryErrorText(openingError.message, t)}`);
+        return;
+      }
+      const number = String((opening as { opening_number?: unknown } | null)?.opening_number ?? "");
+      toast({
+        title: t(editingId ? "تم تحديث الصنف" : "تم إنشاء الصنف"),
+        description: `${t("سُجّل رصيد افتتاحي")}: ${quantity(openingQty)} ${unit.trim()}${number ? ` (${number})` : ""}`,
+      });
+    } else {
+      setBusy(false);
+      toast({ title: t(editingId ? "تم تحديث الصنف" : "تم إنشاء الصنف") });
+    }
     reset(); await load();
   };
 
@@ -230,14 +349,35 @@ export default function InventoryProducts() {
   const numberInput = (label: string, value: string, onChange: (value: string) => void, hint?: string) => (
     <label className="text-xs text-slate-600">{t(label)}
       <input inputMode="decimal" value={value} onChange={(event) => onChange(event.target.value.replace(/[^0-9.]/g, ""))} placeholder="0" dir="ltr" className="mt-1 h-10 w-full rounded border px-3 text-start" />
-      {hint && <span className="mt-1 block text-[11px] text-slate-400">{t(hint)}</span>}
+      {hint && <span className="mt-1 block text-[11px] text-slate-400">{hint}</span>}
     </label>
   );
+
+  // تحت السعر: الوجه الآخر له (قبل الضريبة والضريبة، أو الشامل)
+  const priceHint = (text: string, baseNet: number | null, fallback: string) => {
+    const value = parseInput(text);
+    if (!Number.isFinite(value) || value <= 0) return t(fallback);
+    if (pricesIncludeVat) {
+      const net = netPrice(text, baseNet);
+      return `${t("قبل الضريبة")}: ${money(net)} — ${t("الضريبة")}: ${money(round4(value - net))}`;
+    }
+    return `${t("شامل الضريبة")}: ${money(grossOf(value, vatRate))}`;
+  };
 
   const levelBadge = (product: Product) => {
     const level = levelOf(product);
     if (level === "ok") return null;
     return <span className={`ms-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-semibold ${level === "out" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}><AlertTriangle className="h-3 w-3" />{t(level === "out" ? "نفد" : "تحت حد الطلب")}</span>;
+  };
+
+  const priceCell = (product: Product, net: number) => net
+    ? <>{money(net)}{product.pricesIncludeVat && <p className="text-[11px] text-slate-400">{t("شامل")}: {money(grossOf(net, product.vatRate))}</p>}</>
+    : "—";
+
+  const rateOptions = VAT_RATE_OPTIONS.includes(vatRate) ? VAT_RATE_OPTIONS : [...VAT_RATE_OPTIONS, vatRate];
+  const warehouseName = (id: string) => {
+    const warehouse = warehouses.find((row) => row.id === id);
+    return warehouse ? `${warehouse.code} — ${warehouse.nameAr}` : id.slice(0, 8);
   };
 
   return <Layout><main dir={direction} className="space-y-5">
@@ -267,12 +407,64 @@ export default function InventoryProducts() {
         <label className="text-xs text-slate-600 md:col-span-3">{t("الوصف")}<textarea value={description} onChange={(event) => setDescription(event.target.value.slice(0, 500))} rows={2} placeholder={t("اختياري — يظهر في عرض السعر عند اختيار الصنف")} className="mt-1 w-full rounded border px-3 py-2 text-sm" /></label>
       </div>
 
-      <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">{t("الأسعار")}</h3>
-      <div className="grid gap-3 md:grid-cols-3">
-        {numberInput("سعر البيع (قبل الضريبة)", salePrice, setSalePrice, "يُقترح في بنود المبيعات ويمكن تعديله")}
-        {numberInput("سعر الشراء (قبل الضريبة)", purchasePrice, setPurchasePrice, "يُقترح في بنود المشتريات ويمكن تعديله")}
-        {itemType === "product" && numberInput("حد إعادة الطلب", reorderLevel, setReorderLevel, "تنبيه عندما تنزل الكمية المتوفرة إليه")}
+      <div className="mb-2 mt-5 flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-slate-700">{t("الأسعار")}</h3>
+        <div className="flex flex-wrap items-center gap-4">
+          {/* S18: مفتاح «الأسعار شاملة الضريبة» ونسبة الضريبة */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={pricesIncludeVat}
+            onClick={toggleIncludeVat}
+            className="inline-flex items-center gap-2 text-sm font-medium text-slate-700"
+          >
+            <span className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${pricesIncludeVat ? "bg-emerald-600" : "bg-slate-300"}`}>
+              <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${pricesIncludeVat ? "start-[22px]" : "start-0.5"}`} />
+            </span>
+            {t("الأسعار شاملة الضريبة")}
+          </button>
+          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+            {t("نسبة الضريبة")}
+            <select value={String(vatRate)} onChange={(event) => changeVatRate(Number(event.target.value))} className="h-9 rounded border px-2 text-sm">
+              {rateOptions.map((rate) => <option key={rate} value={String(rate)}>{rate}%</option>)}
+            </select>
+          </label>
+        </div>
       </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        {numberInput(pricesIncludeVat ? "سعر البيع (شامل الضريبة)" : "سعر البيع (قبل الضريبة)", salePrice, setSalePrice, priceHint(salePrice, saleBaseNet, "يُقترح في بنود المبيعات ويمكن تعديله"))}
+        {numberInput(pricesIncludeVat ? "سعر الشراء (شامل الضريبة)" : "سعر الشراء (قبل الضريبة)", purchasePrice, setPurchasePrice, priceHint(purchasePrice, purchaseBaseNet, "يُقترح في بنود المشتريات ويمكن تعديله"))}
+        {itemType === "product" && numberInput("حد إعادة الطلب", reorderLevel, setReorderLevel, t("تنبيه عندما تنزل الكمية المتوفرة إليه"))}
+      </div>
+      <p className="mt-2 text-[11px] text-slate-400">{t("يُحفظ السعر قبل الضريبة، وتُحسب الضريبة في البنود. فاتورة المبيعات بنسبة 15% وسعر الوحدة فيها بخانتين، فقد تختلف الكميات الكبيرة بهللات عن السعر الشامل.")}</p>
+
+      {itemType === "product" && <>
+        <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">{t("المخزون")}</h3>
+        {editingId && <div className="mb-3 rounded-lg border bg-slate-50 px-3 py-2 text-sm">
+          <span className="font-semibold">{t("الكمية المتوفرة")}: </span>
+          {editingStock ? <span className="tabular-nums">{quantity(editingStock.quantity)} {editingProduct?.unit ?? unit}</span> : "—"}
+          {editingStock && editingStock.warehouses.length > 0 && <span className="ms-2 text-xs text-slate-500">
+            ({editingStock.warehouses.map((entry) => `${warehouseName(entry.warehouseId)}: ${quantity(entry.quantity)}`).join("، ")})
+          </span>}
+        </div>}
+        <p className="mb-2 text-xs font-semibold text-slate-600">{t("رصيد افتتاحي (اختياري)")}</p>
+        <div className="grid gap-3 md:grid-cols-4">
+          {numberInput("الكمية", openingQuantity, setOpeningQuantity)}
+          <label className="text-xs text-slate-600">{t("المستودع")}
+            <select value={openingWarehouse} onChange={(event) => setOpeningWarehouse(event.target.value)} className="mt-1 h-10 w-full rounded border px-2 text-sm">
+              <option value="">{t("اختر المستودع")}</option>
+              {warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.code} — {warehouse.nameAr}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-slate-600">{t("تكلفة الوحدة (قبل الضريبة)")}
+            <input inputMode="decimal" value={openingCost} onChange={(event) => setOpeningCost(event.target.value.replace(/[^0-9.]/g, ""))} placeholder={netPrice(purchasePrice, purchaseBaseNet) ? String(netPrice(purchasePrice, purchaseBaseNet)) : "0"} dir="ltr" className="mt-1 h-10 w-full rounded border px-3 text-start" />
+          </label>
+          <AccountSelect label="الحساب المقابل (حقوق الملكية)" value={openingOffset} onChange={setOpeningOffset} prefix="3" />
+        </div>
+        {openingWarehouseQuantity !== 0 && parseInput(openingQuantity) > 0
+          ? <p className="mt-2 text-xs text-amber-700">{t("للصنف حركات في هذا المستودع؛ الرصيد الافتتاحي لمستودع بلا حركات. عدّل الكمية بسند استلام أو صرف أو بالجرد.")}</p>
+          : <p className="mt-2 text-xs text-slate-500">{t("عند الحفظ يُسجَّل سند رصيد افتتاحي مرحّل: مدين المخزون / دائن الحساب المقابل. لمستودع لا حركة فيه لهذا الصنف؛ بعدها تتغير الكمية بسندات الاستلام والصرف والجرد والفواتير.")}</p>}
+      </>}
 
       <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">{t("الحسابات")}</h3>
       <div className="grid gap-3 md:grid-cols-3">
@@ -297,8 +489,8 @@ export default function InventoryProducts() {
             <td className="p-3"><p className="font-semibold">{product.nameAr}</p><p className="text-xs text-slate-500">{product.nameEn || "—"}</p></td>
             <td className="p-3 text-center"><span className={`rounded px-2 py-0.5 text-xs font-semibold ${product.itemType === "product" ? "bg-sky-50 text-sky-800" : "bg-violet-50 text-violet-800"}`}>{t(product.itemType === "product" ? "منتج مخزني" : "خدمة")}</span></td>
             <td className="p-3 text-center">{product.unit}</td>
-            <td className="p-3 text-center tabular-nums">{product.salePrice ? money(product.salePrice) : "—"}</td>
-            <td className="p-3 text-center tabular-nums">{product.purchasePrice ? money(product.purchasePrice) : "—"}</td>
+            <td className="p-3 text-center tabular-nums">{priceCell(product, product.salePrice)}</td>
+            <td className="p-3 text-center tabular-nums">{priceCell(product, product.purchasePrice)}</td>
             <td className="p-3 text-center tabular-nums">{product.itemType === "service" ? <span className="text-slate-400">{t("لا ينطبق")}</span> : available === null ? "—" : <>{quantity(available)}{levelBadge(product)}</>}</td>
             <td className="p-3 text-xs"><p>{t("الإيراد")}: {product.revenueAccountCode}</p>{product.itemType === "product" ? <p>{t("المخزون")}: {product.inventoryAccountCode} · {t("التكلفة")}: {product.cogsAccountCode}</p> : product.purchaseAccountCode ? <p>{t("الشراء")}: {product.purchaseAccountCode}</p> : null}</td>
             <td className="p-3 text-center"><span className={`rounded px-2 py-1 text-xs font-semibold ${product.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{t(product.active ? "نشط" : "غير نشط")}</span></td>

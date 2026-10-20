@@ -89,6 +89,7 @@ export function permissionForMainPath(path: string): string | null {
   if (path.startsWith("/sales")) return "module.sales";
   if (path.startsWith("/purchases")) return "module.purchases";
   if (path.startsWith("/hr")) return "module.hr";
+  if (path.startsWith("/hotel")) return "module.hotel";
   if (path.startsWith("/crm")) return "module.crm";
   if (path.startsWith("/expenses")) return "module.accounting";
   if (path.startsWith("/inventory")) return "module.inventory";
@@ -154,6 +155,38 @@ export function permissionForMainSubPath(path: string): string[] {
   ];
   const match = rules.find(([prefix]) => path.startsWith(prefix));
   return match ? [match[1], match[2]] : [permissionForMainPath(path) ?? ""];
+}
+
+/** S20: مفاتيح قسم الحجوزات (الأدق أولًا: أول مفتاح موجود في الدور يحدد المستوى) */
+export const HOTEL_PERMISSION_KEYS = ["hotel.reservations", "hotel.payments", "hotel.housekeeping", "hotel.setup"] as const;
+
+export function permissionForHotelPath(path: string): string[] {
+  // الحجز الجديد وتعديله: الاستقبال؛ القائمة والتفاصيل: والمقبوضات أيضًا (القبض والرد من صفحة الحجز)
+  if (path === "/hotel/reservations/new" || /^\/hotel\/reservations\/[^/]+\/edit\/?$/.test(path) || path.startsWith("/hotel/guests")) {
+    return ["hotel.reservations", "module.hotel"];
+  }
+  if (path.startsWith("/hotel/reservations")) return ["hotel.reservations", "hotel.payments", "module.hotel"];
+  if (path.startsWith("/hotel/payments")) return ["hotel.payments", "module.hotel"];
+  if (path.startsWith("/hotel/housekeeping")) return ["hotel.housekeeping", "hotel.reservations", "hotel.setup", "module.hotel"];
+  if (path.startsWith("/hotel/setup") || path.startsWith("/hotel/settings")) return ["hotel.setup", "module.hotel"];
+  // لوحة الاستقبال: أي صلاحية حجوزات
+  return ["module.hotel", ...HOTEL_PERMISSION_KEYS];
+}
+
+/** صلاحية قراءة على أي مفتاح من المفاتيح (لا الأول الموجود فقط)، كما يحكم الخادم business_permission_allowed */
+export function checkAnyPerm(liveMap: PermissionMap, keys: readonly string[]): boolean {
+  return keys.some((key) => checkPerm(liveMap, key));
+}
+
+/** أعلى مستوى بين المفاتيح (أي مفتاح يمنح، كما في الخادم) */
+export function permissionLevelAny(liveMap: PermissionMap, keys: readonly string[]): "none" | "read" | "manage" {
+  if (keys.some((key) => canManagePerm(liveMap, key))) return "manage";
+  return checkAnyPerm(liveMap, keys) ? "read" : "none";
+}
+
+/** لوحة الحجوزات: لمن يملك أي صلاحية حجوزات */
+export function hotelAccessAllowed(liveMap: PermissionMap): boolean {
+  return checkAnyPerm(liveMap, ["module.hotel", ...HOTEL_PERMISSION_KEYS]);
 }
 
 export function permissionForHRPath(path: string): string[] {

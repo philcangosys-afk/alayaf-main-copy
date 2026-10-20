@@ -147,6 +147,15 @@ import FleetMaintenance from "./pages/fleet/FleetMaintenance";
 import FleetDocuments from "./pages/fleet/FleetDocuments";
 import FleetTrips from "./pages/fleet/FleetTrips";
 import FleetFuel from "./pages/fleet/FleetFuel";
+import HotelBoard from "./pages/hotel/HotelBoard";
+import HotelReservations from "./pages/hotel/HotelReservations";
+import HotelReservationForm from "./pages/hotel/HotelReservationForm";
+import HotelReservationDetails from "./pages/hotel/HotelReservationDetails";
+import HotelGuests from "./pages/hotel/HotelGuests";
+import HotelPayments from "./pages/hotel/HotelPayments";
+import HotelHousekeeping from "./pages/hotel/HotelHousekeeping";
+import HotelSetupPage from "./pages/hotel/HotelSetup";
+import HotelSettingsPage from "./pages/hotel/HotelSettings";
 import { I18nProvider } from "./i18n";
 import AppErrorBoundary from "./components/AppErrorBoundary";
 import { installGlobalErrorHandlers } from "./lib/errorReporter";
@@ -155,6 +164,12 @@ import { installGlobalErrorHandlers } from "./lib/errorReporter";
 installGlobalErrorHandlers();
 
 /** S16: خطأ في صفحة يعرض شاشة الخطأ برقمه، والانتقال لصفحة أخرى يعيد العرض */
+/** صفحة تبدأ بحالة جديدة لكل مسار (حجز جديد بعد تعديل حجز، أو حجز آخر بالرجوع والتقدم) */
+function KeyedByPath({ render }: { render: (key: string) => ReactNode }) {
+  const location = useLocation();
+  return <>{render(location.pathname + location.search)}</>;
+}
+
 function RouteErrorBoundary({ children }: { children: ReactNode }) {
   const location = useLocation();
   return (
@@ -336,6 +351,18 @@ const App = () => (
           <Route path="/fleet/trips" element={<FleetTrips />} />
           <Route path="/fleet/fuel" element={<FleetFuel />} />
           <Route path="/fleet/*" element={<Navigate to="/fleet" replace />} />
+          {/* S20: الحجوزات (لوحة مستقلة) */}
+          <Route path="/hotel" element={<HotelBoard />} />
+          <Route path="/hotel/reservations" element={<HotelReservations />} />
+          <Route path="/hotel/reservations/new" element={<KeyedByPath render={(key) => <HotelReservationForm key={key} />} />} />
+          <Route path="/hotel/reservations/:id" element={<KeyedByPath render={(key) => <HotelReservationDetails key={key} />} />} />
+          <Route path="/hotel/reservations/:id/edit" element={<KeyedByPath render={(key) => <HotelReservationForm key={key} />} />} />
+          <Route path="/hotel/guests" element={<HotelGuests />} />
+          <Route path="/hotel/payments" element={<HotelPayments />} />
+          <Route path="/hotel/housekeeping" element={<HotelHousekeeping />} />
+          <Route path="/hotel/setup" element={<HotelSetupPage />} />
+          <Route path="/hotel/settings" element={<HotelSettingsPage />} />
+          <Route path="/hotel/*" element={<Navigate to="/hotel" replace />} />
           <Route path="/crm" element={<CRM />} />
           <Route path="/crm/customers" element={<CRM />} />
           <Route path="/crm/vendors" element={<CRM />} />

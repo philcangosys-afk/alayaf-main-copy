@@ -13,6 +13,8 @@ import { toast } from "sonner";
 import { useI18n } from "@/i18n";
 import { hrRequestErrorText } from "@/lib/hrErrors";
 import { isSaudiCompany } from "@/lib/companyProfile";
+import { useCompany } from "@/lib/companyContext";
+import { hasCompanyModule, moduleOfPermission } from "@/lib/companyModules";
 
 type Permission = { key: string; label: string };
 type PermissionGroup = { title: string; permissions: Permission[] };
@@ -57,6 +59,11 @@ const MODULE_TREE: ModuleNode[] = [
   { key: "module.inventory", label: "المستودعات والمخازن", children: [
     { key: "inventory.items", label: "الأصناف" }, { key: "inventory.warehouses", label: "المستودعات" },
     { key: "inventory.movements", label: "حركات المخزون" }, { key: "inventory.reports", label: "تقارير المخزون" },
+  ] },
+  // S20: الحجوزات (إضافة على المحاسبة والمالية)
+  { key: "module.hotel", label: "الحجوزات", children: [
+    { key: "hotel.reservations", label: "الاستقبال والحجوزات والنزلاء" }, { key: "hotel.payments", label: "مقبوضات الحجوزات (الدفعات المقدمة والرد والسداد)" },
+    { key: "hotel.housekeeping", label: "التنظيف والصيانة" }, { key: "hotel.setup", label: "الوحدات وإعدادات الحجوزات" },
   ] },
   { key: "module.fleet", label: "الأسطول والسيارات", children: [
     { key: "fleet.vehicles", label: "السيارات والمركبات" }, { key: "fleet.drivers", label: "السائقون" },
@@ -193,6 +200,32 @@ export default function HRPermissionsAddRole() {
   const [status, setStatus] = useState("فعال");
   const [permissions, setPermissions] = useState<PermissionMap>({});
   const [expandedModules, setExpandedModules] = useState<Set<string>>(() => new Set(["module.sales"]));
+  // S19: أقسام المنشأة غير المشمولة في باقتها لا تظهر (صلاحياتها المحفوظة تبقى كما هي في الدور)؛
+  // بلا الموارد البشرية تبقى صلاحية الأدوار والصلاحيات وحدها
+  const { modules: companyModules } = useCompany();
+  const entitled = (key: string) => hasCompanyModule(companyModules, moduleOfPermission(key));
+  const visibleTree = useMemo(
+    () => MODULE_TREE.flatMap((node): ModuleNode[] => {
+      if (entitled(node.key)) return [{ ...node, children: node.children.filter((child) => entitled(child.key)) }];
+      if (node.key === "module.hr") return [{ key: "hr.permissions", label: "الأدوار والصلاحيات", children: [] }];
+      // قسم غير مشمول: تبقى منه صلاحيات قسم آخر مشمول (ترحيل الرواتب مع الموارد البشرية)
+      return node.children.filter((child) => entitled(child.key)).map((child) => ({ key: child.key, label: child.label, children: [] }));
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [companyModules],
+  );
+  // التبويبات الأخرى: صلاحيات الأقسام المشمولة فقط، والتبويب الفارغ لا يظهر
+  const visibleGroups = useMemo(() => {
+    const result: Record<string, PermissionGroup[]> = {};
+    for (const tab of PERMISSION_TABS) {
+      result[tab] = PERMISSION_GROUPS[tab]
+        .map((group) => ({ ...group, permissions: group.permissions.filter((permission) => entitled(permission.key)) }))
+        .filter((group) => group.permissions.length > 0);
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [companyModules]);
+  const visibleTabs = PERMISSION_TABS.filter((tab) => tab === "الوصول للأقسام" || visibleGroups[tab].length > 0);
 
   useEffect(() => {
     if (!roleId) return;
@@ -217,9 +250,9 @@ export default function HRPermissionsAddRole() {
 
   const activePermissions = useMemo(
     () => activeTab === "الوصول للأقسام"
-      ? MODULE_TREE.flatMap((module) => [{ key: module.key, label: module.label }, ...module.children])
-      : PERMISSION_GROUPS[activeTab].flatMap((group) => group.permissions),
-    [activeTab],
+      ? visibleTree.flatMap((module) => [{ key: module.key, label: module.label }, ...module.children])
+      : (visibleGroups[activeTab] ?? []).flatMap((group) => group.permissions),
+    [activeTab, visibleTree, visibleGroups],
   );
   const allActiveSelected = activePermissions.length > 0
     && activePermissions.filter((permission) => !EXACT_KEYS.has(permission.key)).every((permission) => levelOf(permissions[permission.key]) === "manage");
@@ -312,7 +345,7 @@ export default function HRPermissionsAddRole() {
 
           <div className="space-y-5">
             <div className="flex gap-2 border-b border-gray-200 pb-2 overflow-x-auto whitespace-nowrap">
-              {PERMISSION_TABS.map((tab) => (
+              {visibleTabs.map((tab) => (
                 <button
                   key={tab}
                   type="button"
@@ -342,7 +375,7 @@ export default function HRPermissionsAddRole() {
                   {t("مستوى القسم الفرعي يحسم إن حُدد، وإلا يسري مستوى القسم الرئيسي عليه. مثال: الموارد البشرية «إدارة كاملة» والرواتب «لا وصول» = لا يفتح صفحات الرواتب ولا يعدّلها ولا يعتمدها، ويبقى ما تعرضه تقارير الموارد البشرية لمن له التقارير.")}{" "}
                   {t("لا يمنح أحد دورًا صلاحية أعلى من صلاحياته هو، ولا يُسند لموظف دورًا فوق صلاحياته؛ ذلك لمدير النظام.")}
                 </div>
-                {MODULE_TREE.map((module) => {
+                {visibleTree.map((module) => {
                   const expanded = expandedModules.has(module.key);
                   const moduleLevel = levelOf(permissions[module.key]);
                   return (
@@ -372,7 +405,7 @@ export default function HRPermissionsAddRole() {
                   );
                 })}
               </div>
-            ) : PERMISSION_GROUPS[activeTab].map((group) => (
+            ) : (visibleGroups[activeTab] ?? []).map((group) => (
               <div key={group.title} className="border border-gray-200 rounded-lg overflow-hidden">
                 <div className="px-4 py-3 border-b font-bold bg-gray-50 text-gray-800">{t(group.title)}</div>
                 <div className="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-0">

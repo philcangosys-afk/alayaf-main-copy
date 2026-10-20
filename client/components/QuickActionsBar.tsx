@@ -24,6 +24,15 @@ import { useI18n } from "@/i18n";
 import { hrRequestErrorText } from "@/lib/hrErrors";
 import { riyadhDateString } from "@/lib/utils";
 import { dbErrorOr } from "@/lib/dbErrors";
+import { useCompany } from "@/lib/companyContext";
+import { hasCompanyModule, type CompanyModule } from "@/lib/companyModules";
+
+// S19: أزرار تتبع قسمًا من أقسام المنشأة (تُخفى إن لم يكن في باقتها)
+const ACTION_MODULE: Partial<Record<string, CompanyModule>> = {
+  management: "hr",
+  incoming: "hr",
+  accountant: "accounting",
+};
 
 type Panel =
   | "contact"
@@ -98,6 +107,9 @@ export default function QuickActionsBar() {
   const { t, locale, direction, setLocale, formatDate, formatNumber } =
     useI18n();
   const session = readUserSession();
+  const { modules: companyModules } = useCompany();
+  const hrOn = hasCompanyModule(companyModules, "hr");
+  const visibleActions = actions.filter((action) => hasCompanyModule(companyModules, ACTION_MODULE[action.id] ?? null));
   const [panel, setPanel] = useState<Panel>(null);
   const [contacts, setContacts] = useState<ContactSettings>({
     phone: "",
@@ -122,7 +134,8 @@ export default function QuickActionsBar() {
   const [operator, setOperator] = useState<"+" | "-" | "×" | "÷">("+");
 
   const loadNotices = async () => {
-    if (!session?.id) {
+    // الطلبات والإجازات من الموارد البشرية: بلا القسم لا إشعارات منها
+    if (!session?.id || !hrOn) {
       setNotices([]);
       setNoticeCount(0);
       return;
@@ -287,7 +300,7 @@ export default function QuickActionsBar() {
       dir={direction}
     >
       <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
-        {actions.map(({ id, label, icon: Icon, color }) => (
+        {visibleActions.map(({ id, label, icon: Icon, color }) => (
           <button
             key={id}
             onClick={() => handleAction(id)}
@@ -565,7 +578,7 @@ export default function QuickActionsBar() {
 
           {panel === "account" && (
             <div className="space-y-2 text-sm">
-              <button
+              {hrOn && <button
                 onClick={() => {
                   setPanel(null);
                   navigate("/employee/dashboard?view=profile");
@@ -573,7 +586,7 @@ export default function QuickActionsBar() {
                 className="flex w-full items-center gap-3 rounded-xl border p-3 hover:bg-slate-50"
               >
                 <User className="h-4 w-4 text-blue-600" /> {t("الملف الشخصي")}
-              </button>
+              </button>}
               <button
                 onClick={() => {
                   setPanel(null);
@@ -584,7 +597,7 @@ export default function QuickActionsBar() {
                 <BriefcaseBusiness className="h-4 w-4 text-violet-600" />{" "}
                 {t("لوحة إدارة الأعمال")}
               </button>
-              <button
+              {hrOn && <button
                 onClick={() => {
                   setPanel(null);
                   navigate("/hr/dashboard");
@@ -593,7 +606,7 @@ export default function QuickActionsBar() {
               >
                 <BriefcaseBusiness className="h-4 w-4 text-emerald-600" />{" "}
                 {t("لوحة الموارد البشرية")}
-              </button>
+              </button>}
               <button
                 onClick={() => {
                   localStorage.removeItem("user_session");

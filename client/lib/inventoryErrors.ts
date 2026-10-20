@@ -55,6 +55,10 @@ export function inventoryErrorText(message: string, t: Translate = keepSource): 
   if (has("INVENTORY_PRODUCT_HAS_MOVEMENTS")) return t("لا يمكن حذف صنف لديه حركات مخزون. أوقفه بإلغاء خيار «نشط» بدلًا من الحذف.");
   // S17: أسعار الصنف وبياناته، والصرف التلقائي مع فاتورة المبيعات
   if (has("INVENTORY_PRODUCT_PRICE_INVALID")) return t("الأسعار وحد إعادة الطلب أرقام موجبة أو صفر.");
+  // S18: نسبة الضريبة، والرصيد الافتتاحي من بطاقة الصنف
+  if (has("INVENTORY_PRODUCT_VAT_RATE_INVALID")) return t("نسبة الضريبة رقم من 0 إلى 100.");
+  if (has("INVENTORY_OPENING_OFFSET_ACCOUNT_CLASS_INVALID")) return t("الحساب المقابل للرصيد الافتتاحي يجب أن يكون من حقوق الملكية (يبدأ بالرقم 3).");
+  if (has("INVENTORY_OPENING_LINE_VALUES_INVALID") || has("INVENTORY_OPENING_LINE_AMOUNT_INVALID")) return t("الرصيد الافتتاحي يحتاج كمية وتكلفة وحدة أكبر من صفر ومستودعًا.");
   if (has("INVENTORY_PRODUCT_BARCODE_EXISTS")) return t("الباركود مستخدم لصنف آخر في المنشأة.");
   if (has("INVENTORY_PRODUCT_BARCODE_INVALID")) return t("الباركود غير صالح: أحرف إنجليزية وأرقام والرموز . _ - فقط، حتى 50 خانة.");
   if (has("INVENTORY_PRODUCT_DESCRIPTION_TOO_LONG")) return t("الوصف أطول من 500 حرف.");

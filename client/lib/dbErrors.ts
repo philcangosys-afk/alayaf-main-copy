@@ -17,6 +17,8 @@ const UNIQUE_MESSAGES: Array<[string, string]> = [
   ["customer_number_uidx", "رقم العميل مستخدم."],
   ["vendor_number_uidx", "رقم المورد مستخدم."],
   ["vendor_reference_uidx", "رقم فاتورة المورد مسجل من قبل لهذا المورد."],
+  // S18: عرض السعر يُحوَّل إلى فاتورة واحدة
+  ["sales_invoices_quotation_uidx", "عرض السعر هذا محوّل إلى فاتورة مسبقًا."],
 ];
 
 export function dbErrorText(message: string): string | null {
@@ -34,6 +36,14 @@ export function dbErrorText(message: string): string | null {
       : "أحد الحقول يشير إلى سجل غير موجود.";
   }
   if (/COMPANY_PREFIX_REQUIRED/.test(text)) return "الرقم يجب أن يبدأ ببادئة المنشأة (مثل 1001-).";
+  // S18: عرض السعر المحوّل إلى فاتورة
+  if (/QUOTATION_INVOICED_READ_ONLY/.test(text)) return "عرض السعر محوّل إلى فاتورة؛ لا يُعدَّل ولا يُحذف.";
+  if (/QUOTATION_INVOICE_LINK_READ_ONLY/.test(text)) return "ربط عرض السعر بالفاتورة يتم عند حفظ الفاتورة فقط.";
+  if (/sales_invoices_quotation_fkey/.test(text)) {
+    return /(update or )?delete on table/i.test(text)
+      ? "لا يُحذف عرض سعر محوّل إلى فاتورة."
+      : "عرض السعر غير موجود.";
+  }
   if (/BILLING_COUNTRY_NOT_READY/.test(text)) return BILLING_COUNTRY_MESSAGE;
   if (/row-level security|permission denied/i.test(text)) return "لا تملك صلاحية تنفيذ هذا الإجراء.";
   if (/Failed to fetch|NetworkError|network/i.test(text)) return "تعذر الاتصال بالخادم. تحقق من الاتصال وحاول مرة أخرى.";
