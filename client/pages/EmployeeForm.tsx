@@ -290,7 +290,7 @@ export const mapRowToForm = (r: Record<string, unknown>): EmpFormData => ({
 });
 
 // ─── Constants ──────────────────────────────────────────────────────────────
-const NATIONALITIES = [
+export const NATIONALITIES = [
   "المملكة العربية السعودية", "الإمارات العربية المتحدة", "البحرين", "الكويت", "عُمان", "قطر",
   "مصر", "السودان", "جنوب السودان", "ليبيا", "تونس", "الجزائر", "المغرب", "موريتانيا", "الصومال", "جيبوتي", "جزر القمر",
   "سوريا", "الأردن", "لبنان", "فلسطين", "العراق", "اليمن",
@@ -303,12 +303,12 @@ const NATIONALITIES = [
 ];
 const DEFAULT_DEPARTMENTS = ["الإدارة العليا", "إدارة الموارد البشرية", "إدارة المالية", "إدارة التشغيل", "إدارة المبيعات"];
 const DEFAULT_SECTIONS = ["الموارد البشرية", "المحاسبة", "الصيانة والتشغيل", "المبيعات", "تقنية المعلومات"];
-const GENDERS = ["ذكر", "أنثى"];
+export const GENDERS = ["ذكر", "أنثى"];
 const MARITAL_STATUSES = ["أعزب", "متزوج", "مطلق", "أرمل"];
 const DEFAULT_JOBS = ["مدير عام", "مدير موارد بشرية", "مدير مالي", "محاسب", "مهندس", "فني صيانة", "مسؤول مبيعات", "مسؤول مشتريات", "أخصائي موارد بشرية", "موظف إداري", "عامل نظافة"];
 const CURRENCIES = ["SAR"];
 const CURRENCY_LABELS: Record<string, string> = { SAR: "ريال سعودي (SAR)" };
-const EMPLOYMENT_TYPES = ["أساسي", "جزئي", "عقد", "متعاون"];
+export const EMPLOYMENT_TYPES = ["أساسي", "جزئي", "عقد", "متعاون"];
 const EMPLOYEE_STATUSES = ["فعال", "غير فعال", "إجازة", "منتهي"];
 const WORK_TIMES = ["صباحي", "مسائي", "كامل", "ورديات"];
 const EMPLOYEE_CATEGORIES = ["دوام", "عقد", "جزئي", "مؤقت"];
@@ -468,7 +468,7 @@ const validateEmployeeForm = (form: EmpFormData, mode: "create" | "edit", initia
   return issues;
 };
 
-const buildEmployeePayload = (form: EmpFormData): Record<string, unknown> => ({
+export const buildEmployeePayload = (form: EmpFormData): Record<string, unknown> => ({
   name: form.name.trim(),
   first_name: form.firstName.trim(),
   birth_date: form.birthDate || null,

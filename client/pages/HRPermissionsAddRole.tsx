@@ -56,6 +56,16 @@ const MODULE_TREE: ModuleNode[] = [
     { key: "accounting.tax", label: "حساب الضرائب" }, { key: "accounting.tax_reports", label: "التقارير الضريبية" },
     { key: "accounting.expenses", label: "المصروفات" }, { key: "accounting.payroll_posting", label: "ترحيل الرواتب إلى المحاسبة" },
   ] },
+  // S22: نقاط البيع (جزء من المحاسبة والمالية): «قراءة» تمنح الميزة نفسها، و«إدارة» تزيدها كما في كل بند
+  { key: "module.pos", label: "نقاط البيع", children: [
+    { key: "pos.sell", label: "البيع وفتح الجلسة وإغلاقها" },
+    { key: "pos.price_change", label: "تغيير سعر الصنف عند البيع" },
+    { key: "pos.discount", label: "الخصم (قراءة: حتى الحد في الإعدادات، إدارة: بلا حد)" },
+    { key: "pos.returns", label: "المرتجع (إدارة: الرد بطريقة غير التي قُبض بها)" },
+    { key: "pos.cash", label: "عمليات النقد: قبض من عميل ومصروف وإيداع وسحب" },
+    { key: "pos.sessions", label: "كل الجلسات وتقاريرها (إدارة: إغلاق جلسات غيره وتسوية فرق الدفتر)" },
+    { key: "pos.devices", label: "الأجهزة والإعدادات (إدارة: الإضافة والتعديل)" },
+  ] },
   { key: "module.inventory", label: "المستودعات والمخازن", children: [
     { key: "inventory.items", label: "الأصناف" }, { key: "inventory.warehouses", label: "المستودعات" },
     { key: "inventory.movements", label: "حركات المخزون" }, { key: "inventory.reports", label: "تقارير المخزون" },

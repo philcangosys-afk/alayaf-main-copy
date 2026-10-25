@@ -1203,18 +1203,18 @@ function InvoicesList({
 
       <DataTable
         headers={[
-          t("الإجراءات"),
-          t("حالة ZATCA"),
-          t("القيد المحاسبي"),
-          ...(canViewIssuer ? [t("مصدر الفاتورة")] : []),
-          t("الحالة"),
-          t("المبلغ المتبقي"),
-          t("المبلغ المدفوع"),
-          t("الإجمالي"),
-          t("العميل"),
-          t("تاريخ الاستحقاق"),
-          t("تاريخ الفاتورة"),
           t("رقم الفاتورة"),
+          t("الإجراءات"),
+          t("العميل"),
+          t("تاريخ الفاتورة"),
+          t("تاريخ الاستحقاق"),
+          t("الإجمالي"),
+          t("المبلغ المدفوع"),
+          t("المبلغ المتبقي"),
+          t("الحالة"),
+          ...(canViewIssuer ? [t("مصدر الفاتورة")] : []),
+          t("القيد المحاسبي"),
+          t("حالة ZATCA"),
         ]}
         gradient="from-[#1e293b] to-[#334155]"
       >
@@ -1226,6 +1226,11 @@ function InvoicesList({
               i % 2 !== 0 && "bg-muted/10",
             )}
           >
+            <td className="px-5 py-3.5 align-middle text-start font-bold text-primary whitespace-nowrap">
+              <button type="button" onClick={() => onView(invoice)} className="hover:underline">
+                {invoice.id}
+              </button>
+            </td>
             <td className="px-5 py-3.5 align-middle">
               <div className="flex min-w-max items-center gap-1.5 whitespace-nowrap">
                 <ActionBtn
@@ -1313,6 +1318,57 @@ function InvoicesList({
                   )}
               </div>
             </td>
+            <td className="px-5 py-3.5 align-middle text-start text-foreground font-medium whitespace-nowrap">
+              {invoice.customer}
+            </td>
+            <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
+              {invoice.date ? formatDate(invoice.date) : "-"}
+            </td>
+            <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
+              {invoice.dueDate ? formatDate(invoice.dueDate) : "-"}
+            </td>
+            <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap font-bold text-primary">
+              {formatNumber(parseCurrency(invoice.total))} {t("ريال")}
+            </td>
+            <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap text-emerald-600 font-semibold text-[13px]">
+              {formatNumber(parseCurrency(invoice.paid))} {t("ريال")}
+            </td>
+            <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap text-red-500 font-semibold text-[13px]">
+              {formatNumber(parseCurrency(invoice.remaining))} {t("ريال")}
+            </td>
+            <td className="px-5 py-3.5 align-middle text-start">
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-3 py-0.5 text-[11px] font-bold whitespace-nowrap",
+                  invoice.status === "مدفوعة بالكامل"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : invoice.status === "مدفوعة جزئياً"
+                      ? "bg-amber-50 text-amber-700 border-amber-200"
+                      : "bg-sky-50 text-sky-700 border-sky-200",
+                )}
+              >
+                {t(invoice.status)}
+              </span>
+            </td>
+            {canViewIssuer && <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap">{invoice.issuerName || "—"}</td>}
+            <td className="px-5 py-3.5 align-middle text-start">
+              <span
+                className={cn(
+                  "inline-flex rounded-full border px-3 py-0.5 text-[11px] font-bold whitespace-nowrap",
+                  invoice.accountingStatus === "posted"
+                    ? "bg-blue-50 text-blue-700 border-blue-200"
+                    : "bg-amber-50 text-amber-700 border-amber-200",
+                )}
+              >
+                {t(
+                  accountingStatusLabels[
+                    invoice.accountingStatus ?? "unposted"
+                  ] ??
+                    invoice.accountingStatus ??
+                    "",
+                )}
+              </span>
+            </td>
             <td className="px-5 py-3.5 align-middle text-start">
               <span
                 className={cn(
@@ -1335,60 +1391,6 @@ function InvoicesList({
                     "",
                 )}
               </span>
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start">
-              <span
-                className={cn(
-                  "inline-flex rounded-full border px-3 py-0.5 text-[11px] font-bold whitespace-nowrap",
-                  invoice.accountingStatus === "posted"
-                    ? "bg-blue-50 text-blue-700 border-blue-200"
-                    : "bg-amber-50 text-amber-700 border-amber-200",
-                )}
-              >
-                {t(
-                  accountingStatusLabels[
-                    invoice.accountingStatus ?? "unposted"
-                  ] ??
-                    invoice.accountingStatus ??
-                    "",
-                )}
-              </span>
-            </td>
-            {canViewIssuer && <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap">{invoice.issuerName || "—"}</td>}
-            <td className="px-5 py-3.5 align-middle text-start">
-              <span
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-3 py-0.5 text-[11px] font-bold whitespace-nowrap",
-                  invoice.status === "مدفوعة بالكامل"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                    : invoice.status === "مدفوعة جزئياً"
-                      ? "bg-amber-50 text-amber-700 border-amber-200"
-                      : "bg-sky-50 text-sky-700 border-sky-200",
-                )}
-              >
-                {t(invoice.status)}
-              </span>
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap text-red-500 font-semibold text-[13px]">
-              {formatNumber(parseCurrency(invoice.remaining))} {t("ريال")}
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap text-emerald-600 font-semibold text-[13px]">
-              {formatNumber(parseCurrency(invoice.paid))} {t("ريال")}
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap font-bold text-primary">
-              {formatNumber(parseCurrency(invoice.total))} {t("ريال")}
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start text-foreground font-medium">
-              {invoice.customer}
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
-              {invoice.dueDate ? formatDate(invoice.dueDate) : "-"}
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
-              {invoice.date ? formatDate(invoice.date) : "-"}
-            </td>
-            <td className="px-5 py-3.5 align-middle text-start font-bold text-primary hover:underline cursor-pointer">
-              {invoice.id}
             </td>
           </tr>
         ))}

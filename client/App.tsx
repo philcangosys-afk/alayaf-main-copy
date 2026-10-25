@@ -156,6 +156,11 @@ import HotelPayments from "./pages/hotel/HotelPayments";
 import HotelHousekeeping from "./pages/hotel/HotelHousekeeping";
 import HotelSetupPage from "./pages/hotel/HotelSetup";
 import HotelSettingsPage from "./pages/hotel/HotelSettings";
+import PosDevices from "./pages/pos/PosDevices";
+import PosSell from "./pages/pos/PosSell";
+import PosSessions from "./pages/pos/PosSessions";
+import PosSessionDetails from "./pages/pos/PosSessionDetails";
+import PosSettings from "./pages/pos/PosSettings";
 import { I18nProvider } from "./i18n";
 import AppErrorBoundary from "./components/AppErrorBoundary";
 import { installGlobalErrorHandlers } from "./lib/errorReporter";
@@ -363,6 +368,13 @@ const App = () => (
           <Route path="/hotel/setup" element={<HotelSetupPage />} />
           <Route path="/hotel/settings" element={<HotelSettingsPage />} />
           <Route path="/hotel/*" element={<Navigate to="/hotel" replace />} />
+          {/* S22: نقاط البيع (شاشة البيع بملء الشاشة بلا القائمة الجانبية) */}
+          <Route path="/pos" element={<PosDevices />} />
+          <Route path="/pos/sell" element={<PosSell />} />
+          <Route path="/pos/sessions" element={<PosSessions />} />
+          <Route path="/pos/sessions/:id" element={<KeyedByPath render={(key) => <PosSessionDetails key={key} />} />} />
+          <Route path="/pos/settings" element={<PosSettings />} />
+          <Route path="/pos/*" element={<Navigate to="/pos" replace />} />
           <Route path="/crm" element={<CRM />} />
           <Route path="/crm/customers" element={<CRM />} />
           <Route path="/crm/vendors" element={<CRM />} />

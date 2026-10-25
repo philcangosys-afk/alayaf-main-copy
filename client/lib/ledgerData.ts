@@ -158,6 +158,16 @@ export const JOURNAL_REFERENCE_LABELS: Record<string, string> = {
   accounting_reclassifications: "إعادة تصنيف",
   opening_balance: "رصيد افتتاحي",
   opening_balances: "رصيد افتتاحي",
+  // S22: نقاط البيع (البيع فاتورة مبيعات وسند قبض، والمرتجع إشعار دائن؛ وهذه حركات الجلسة)
+  pos_movements: "حركة نقطة بيع",
+  pos_refund: "رد مرتجع نقطة بيع",
+  pos_expense: "مصروف نقطة بيع",
+  pos_cash_in: "إيداع في جلسة نقطة بيع",
+  pos_cash_out: "سحب من جلسة نقطة بيع",
+  pos_shortage: "عجز إغلاق جلسة",
+  pos_surplus: "زيادة إغلاق جلسة",
+  pos_handover: "تسليم نقد جلسة",
+  pos_rounding: "تقريب مرتجعات نقطة بيع",
 };
 
 /** اسم نوع المرجع بالعربية (أو بالترجمة إن مُرّرت t)؛ الرمز غير المعروف يُعاد كما هو. */

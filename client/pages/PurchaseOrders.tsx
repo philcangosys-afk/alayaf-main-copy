@@ -769,11 +769,17 @@ function OrdersList({
       )}
 
       <DataTable
-        headers={[t("الإجراءات"), t("الحالة"), t("المجموع"), t("المورد"), t("تاريخ الأمر"), t("رقم الأمر")]}
+        headers={[t("رقم الأمر"), t("الإجراءات"), t("المورد"), t("تاريخ الأمر"), t("المجموع"), t("الحالة")]}
         gradient="from-violet-800 to-purple-900"
       >
         {filteredOrders.map((order) => (
           <tr key={order.id} className="border-b border-border/30 hover:bg-muted/20 transition-colors">
+            <td
+              className="px-5 py-3.5 align-middle font-semibold text-violet-600 hover:underline cursor-pointer whitespace-nowrap"
+              onClick={() => onView(order)}
+            >
+              {orderNumberOf(order)}
+            </td>
             <td className="px-5 py-3.5 align-middle">
               <div className="flex items-center gap-1">
                 <ActionBtn icon={Eye} label={t("عرض")} color="blue" onClick={() => onView(order)} />
@@ -804,6 +810,9 @@ function OrdersList({
                 )}
               </div>
             </td>
+            <td className="px-5 py-3.5 align-middle">{vendorNameOf(order, vendors) || "-"}</td>
+            <td className="px-5 py-3.5 align-middle text-muted-foreground">{formatOrderDate(order.date, formatDate)}</td>
+            <td className="px-5 py-3.5 align-middle font-medium whitespace-nowrap">{formatCurrency(orderTotals(order).total, formatNumber, t)}</td>
             <td className="px-5 py-3.5 align-middle">
               <div className="flex flex-col items-start gap-1">
                 <span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold", order.statusColor)}>
@@ -811,15 +820,6 @@ function OrdersList({
                 </span>
                 {order.invoiceId && <InvoiceLink invoiceId={order.invoiceId} />}
               </div>
-            </td>
-            <td className="px-5 py-3.5 align-middle font-medium whitespace-nowrap">{formatCurrency(orderTotals(order).total, formatNumber, t)}</td>
-            <td className="px-5 py-3.5 align-middle">{vendorNameOf(order, vendors) || "-"}</td>
-            <td className="px-5 py-3.5 align-middle text-muted-foreground">{formatOrderDate(order.date, formatDate)}</td>
-            <td
-              className="px-5 py-3.5 align-middle font-semibold text-violet-600 hover:underline cursor-pointer whitespace-nowrap"
-              onClick={() => onView(order)}
-            >
-              {orderNumberOf(order)}
             </td>
           </tr>
         ))}

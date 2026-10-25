@@ -25,6 +25,7 @@ import type { EmpFormData } from "./EmployeeForm";
 import { EmployeePhoto, employeeFileName, isEmployeeStoragePath, openEmployeeFile } from "@/components/hr/employeeFiles";
 import { printReport } from "@/lib/reportExport";
 import { deleteOrDeactivateEmployee } from "@/components/hr/employeeActions";
+import EmployeesImportButton from "@/components/hr/EmployeesImportButton";
 import { useI18n } from "@/i18n";
 import * as XLSX from "xlsx";
 import ExcelJS from "exceljs";
@@ -383,12 +384,15 @@ export default function HREmployees() {
             <Users className="h-5 w-5 text-blue-600" />
             {t("قائمة الموظفين")}
           </h1>
-          <button
-            onClick={() => setMode("create")}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition shadow"
-          >
-            + {t("إضافة موظف جديد")}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <EmployeesImportButton onDone={() => setRefreshKey((k) => k + 1)} />
+            <button
+              onClick={() => setMode("create")}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition shadow"
+            >
+              + {t("إضافة موظف جديد")}
+            </button>
+          </div>
         </div>
 
         {/* ─── Table Card ─────────────────────────────────────────────────── */}

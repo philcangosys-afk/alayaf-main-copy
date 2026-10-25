@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BedDouble, Edit3, Plus, Save, Trash2, X } from "lucide-react";
 import Layout from "@/components/Layout";
 import { useI18n } from "@/i18n";
@@ -9,6 +9,8 @@ import { useRolePermissions } from "@/hooks/useRolePermissions";
 import { permissionLevelAny } from "@/lib/authSession";
 import { hotelErrorText, isMoney, loadHotelSetup, type HotelFloor, type HotelSetup, type HotelUnit, type HotelUnitType } from "@/lib/hotel";
 import { ErrorNote, HotelButton, HotelConfirm, HotelHeader, hotelInput, hotelLabel, hotelSelect, useMoney } from "@/components/hotel/HotelUi";
+import { DataImportButton } from "@/components/DataImportDialog";
+import { hotelUnitsImportSpec } from "@/lib/imports/hotel";
 
 type Tab = "units" | "types" | "floors";
 type UnitForm = { code: string; name: string; typeId: string; floorId: string; basePrice: string; maxOccupancy: string; active: boolean; notes: string; sortOrder: string };
@@ -22,7 +24,7 @@ const emptyFloor: FloorForm = { name: "", sortOrder: "0" };
 
 /** الوحدات وأنواعها والطوابق. السعر والسعة في الوحدة يتقدمان على نوعها إن حُددا */
 export default function HotelSetupPage() {
-  const { t, direction, formatNumber } = useI18n();
+  const { t, direction, formatNumber, locale } = useI18n();
   const money = useMoney();
   const { permissions } = useRolePermissions();
   const canManage = permissionLevelAny(permissions, ["hotel.setup", "module.hotel"]) === "manage";
@@ -46,6 +48,9 @@ export default function HotelSetupPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { void load(); }, []);
 
+  // الاستيراد من إكسل: قوائم القالب من الأنواع والطوابق الحالية
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const unitsImportSpec = useMemo(() => hotelUnitsImportSpec(setup, t), [setup, locale]);
   const typeById = new Map(setup.types.map((type) => [type.id, type]));
   const floorById = new Map(setup.floors.map((floor) => [floor.id, floor]));
   const intText = (value: string) => /^\d{1,6}$/.test(value.trim());
@@ -127,7 +132,12 @@ export default function HotelSetupPage() {
           title="الوحدات وأنواعها"
           description="ابدأ بأنواع الوحدات (غرفة مفردة، مزدوجة، جناح، شقة...) وسعر الليلة وسعتها، ثم الطوابق، ثم الوحدات. الأسعار قبل الضريبة."
           actions={canManage ? (
-            tab === "units" ? <HotelButton onClick={() => { setError(""); setUnitEdit({ id: null, form: { ...emptyUnit, typeId: setup.types.find((type) => type.active)?.id ?? "" } }); }} disabled={!setup.types.length}><Plus className="h-4 w-4" />{t("وحدة جديدة")}</HotelButton>
+            tab === "units" ? (
+              <>
+                {setup.types.length > 0 && <DataImportButton spec={unitsImportSpec} onDone={() => void load()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50" />}
+                <HotelButton onClick={() => { setError(""); setUnitEdit({ id: null, form: { ...emptyUnit, typeId: setup.types.find((type) => type.active)?.id ?? "" } }); }} disabled={!setup.types.length}><Plus className="h-4 w-4" />{t("وحدة جديدة")}</HotelButton>
+              </>
+            )
               : tab === "types" ? <HotelButton onClick={() => { setError(""); setTypeEdit({ id: null, form: emptyType }); }}><Plus className="h-4 w-4" />{t("نوع جديد")}</HotelButton>
               : <HotelButton onClick={() => { setError(""); setFloorEdit({ id: null, form: emptyFloor }); }}><Plus className="h-4 w-4" />{t("طابق جديد")}</HotelButton>
           ) : undefined}

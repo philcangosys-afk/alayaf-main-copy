@@ -942,7 +942,7 @@ function OrdersList({
       </FilterBar>
 
       <DataTable
-        headers={["الإجراءات", "الحالة", "رقم عرض السعر", "الإجمالي", "العميل", "تاريخ التسليم", "تاريخ الأمر", "رقم الأمر"].map(t)}
+        headers={["رقم الأمر", "الإجراءات", "العميل", "تاريخ الأمر", "تاريخ التسليم", "الإجمالي", "رقم عرض السعر", "الحالة"].map(t)}
         gradient="from-[#1e293b] to-[#334155]"
       >
         {filteredOrders.map((order, i) => {
@@ -950,6 +950,9 @@ function OrdersList({
           const statusKey = invoiced ? "invoiced" : order.status;
           return (
             <tr key={order.id} className={cn("hover:bg-muted/30 transition-colors", i % 2 !== 0 && "bg-muted/10")}>
+              <td className="px-5 py-3.5 align-middle text-start font-bold text-primary hover:underline cursor-pointer" onClick={() => onView(order)}>
+                {order.id}
+              </td>
               <td className="px-5 py-3.5 align-middle">
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <ActionBtn icon={Eye} label={t("عرض")} color="blue" onClick={() => onView(order)} />
@@ -965,6 +968,26 @@ function OrdersList({
                     <ActionBtn icon={Trash2} label={t("حذف")} color="red" onClick={() => void onDelete(order)} />
                   )}
                 </div>
+              </td>
+              <td className="px-5 py-3.5 align-middle text-start text-foreground font-medium whitespace-nowrap">
+                {order.customer}
+              </td>
+              <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
+                {order.date ? formatDate(order.date) : "-"}
+              </td>
+              <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
+                {order.deliveryDate ? formatDate(order.deliveryDate) : "-"}
+              </td>
+              <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap font-bold text-primary">
+                {order.hasDbTotals || order.items.length > 0 || /[0-9٠-٩]/.test(order.total)
+                  ? `${formatNumber(cleanZero(getOrderGrandTotal(order)), {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })} ${t("ريال")}`
+                  : "-"}
+              </td>
+              <td className="px-5 py-3.5 align-middle text-start text-primary font-medium">
+                {order.quotationId || "-"}
               </td>
               <td className="px-5 py-3.5 align-middle text-start space-y-1">
                 <span
@@ -985,29 +1008,6 @@ function OrdersList({
                     {getStatusLabel(order.subStatus, t)}
                   </span>
                 )}
-              </td>
-              <td className="px-5 py-3.5 align-middle text-start text-primary font-medium">
-                {order.quotationId || "-"}
-              </td>
-              <td className="px-5 py-3.5 align-middle text-start whitespace-nowrap font-bold text-primary">
-                {order.hasDbTotals || order.items.length > 0 || /[0-9٠-٩]/.test(order.total)
-                  ? `${formatNumber(cleanZero(getOrderGrandTotal(order)), {
-                      minimumFractionDigits: 2,
-                      maximumFractionDigits: 2,
-                    })} ${t("ريال")}`
-                  : "-"}
-              </td>
-              <td className="px-5 py-3.5 align-middle text-start text-foreground font-medium">
-                {order.customer}
-              </td>
-              <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
-                {order.deliveryDate ? formatDate(order.deliveryDate) : "-"}
-              </td>
-              <td className="px-5 py-3.5 align-middle text-start text-muted-foreground text-[13px]">
-                {order.date ? formatDate(order.date) : "-"}
-              </td>
-              <td className="px-5 py-3.5 align-middle text-start font-bold text-primary hover:underline cursor-pointer" onClick={() => onView(order)}>
-                {order.id}
               </td>
             </tr>
           );

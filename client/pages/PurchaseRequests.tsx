@@ -149,11 +149,14 @@ function RequestsList({
       </FilterBar>
 
       <DataTable
-        headers={["الإجراءات", "الاعتماد", "الحالة", "المجموع", "القسم", "مقدم الطلب", "الجهة", "النوع", "التاريخ", "رقم الطلب"]}
+        headers={["رقم الطلب", "الإجراءات", "النوع", "التاريخ", "الجهة", "مقدم الطلب", "القسم", "المجموع", "الحالة", "الاعتماد"]}
         gradient="from-amber-800 to-orange-900"
       >
         {requests.map((request) => (
           <tr key={request.id} className="border-b border-border/30 hover:bg-muted/20 transition-colors">
+            <td className="px-5 py-3.5 align-middle font-semibold text-amber-600 hover:underline cursor-pointer">
+              {request.id}
+            </td>
             <td className="px-5 py-3.5 align-middle">
               <div className="flex items-center gap-1 flex-wrap">
                 <ActionBtn icon={Eye} label="عرض" color="blue" />
@@ -161,24 +164,21 @@ function RequestsList({
                 <ActionBtn icon={Trash2} label="حذف" color="red" />
               </div>
             </td>
-            <td className="px-5 py-3.5 align-middle">
-              <span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold", request.approvalColor)}>
-                {request.approval}
-              </span>
-            </td>
+            <td className="px-5 py-3.5 align-middle">{request.type}</td>
+            <td className="px-5 py-3.5 align-middle text-muted-foreground">{request.date}</td>
+            <td className="px-5 py-3.5 align-middle">{request.department}</td>
+            <td className="px-5 py-3.5 align-middle">{request.requester}</td>
+            <td className="px-5 py-3.5 align-middle">{request.section}</td>
+            <td className="px-5 py-3.5 align-middle font-medium whitespace-nowrap">{request.total}</td>
             <td className="px-5 py-3.5 align-middle">
               <span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold", request.statusColor)}>
                 {request.status}
               </span>
             </td>
-            <td className="px-5 py-3.5 align-middle font-medium whitespace-nowrap">{request.total}</td>
-            <td className="px-5 py-3.5 align-middle">{request.section}</td>
-            <td className="px-5 py-3.5 align-middle">{request.requester}</td>
-            <td className="px-5 py-3.5 align-middle">{request.department}</td>
-            <td className="px-5 py-3.5 align-middle">{request.type}</td>
-            <td className="px-5 py-3.5 align-middle text-muted-foreground">{request.date}</td>
-            <td className="px-5 py-3.5 align-middle font-semibold text-amber-600 hover:underline cursor-pointer">
-              {request.id}
+            <td className="px-5 py-3.5 align-middle">
+              <span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold", request.approvalColor)}>
+                {request.approval}
+              </span>
             </td>
           </tr>
         ))}

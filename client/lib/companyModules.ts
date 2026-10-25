@@ -20,6 +20,8 @@ export const COMPANY_MODULE_LABELS: Record<CompanyModule, string> = {
 export function moduleOfPermission(key: string): CompanyModule | null {
   if (!key) return null;
   if (key === "module.hotel" || key.startsWith("hotel.")) return "hotel";
+  // S22: نقاط البيع جزء من المحاسبة والمالية (دوالها في الخادم تتحقق من القسم نفسها)
+  if (key === "module.pos" || key.startsWith("pos.")) return "accounting";
   if (key === "accounting.payroll_posting") return "hr";
   if (key === "hr.permissions" || key.startsWith("hr.permissions.")) return null;
   if (key === "module.hr" || key.startsWith("hr.") || key.startsWith("employees.")) return "hr";
@@ -34,6 +36,7 @@ export function moduleOfPermission(key: string): CompanyModule | null {
 /** قسم صفحة من مسارها؛ null للمتاح للجميع */
 export function moduleForPath(path: string): CompanyModule | null {
   if (path.startsWith("/hotel")) return "hotel";
+  if (path.startsWith("/pos")) return "accounting";
   // الأدوار والصلاحيات وسجل النشاط تحت الموارد البشرية لكنها للجميع
   if (path.startsWith("/hr/permissions") || path.startsWith("/hr/user-logs")) return null;
   // الفروع: بلا الموارد البشرية يديرها مدير النظام (كما في الخادم)

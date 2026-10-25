@@ -10,10 +10,14 @@ import {
   optionLabel, type HotelGuest, type HotelReservation, type HotelUnit,
 } from "@/lib/hotel";
 import { ErrorNote, HotelButton, HotelHeader, ReservationStatusPill, hotelInput, useHotelDate } from "@/components/hotel/HotelUi";
+import { DataImportButton } from "@/components/DataImportDialog";
+import { hotelReservationsImportSpec } from "@/lib/imports/hotel";
 
 /** قائمة الحجوزات في فترة (بحسب تقاطع الإقامة معها)، مع المقيمين دائمًا */
 export default function HotelReservations() {
-  const { t, direction, formatNumber } = useI18n();
+  const { t, direction, formatNumber, locale } = useI18n();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const importSpec = useMemo(() => hotelReservationsImportSpec(t), [locale]);
   const formatDate = useHotelDate();
   const navigate = useNavigate();
   const { permissions } = useRolePermissions();
@@ -69,7 +73,12 @@ export default function HotelReservations() {
           icon={CalendarRange}
           title="الحجوزات"
           description="الحجوزات التي تقع إقامتها في الفترة المختارة، والمقيمون حاليًا. افتح الحجز لتسجيل الدخول أو المغادرة أو القبض."
-          actions={canBook ? <HotelButton onClick={() => navigate("/hotel/reservations/new")}><CalendarPlus className="h-4 w-4" />{t("حجز جديد")}</HotelButton> : undefined}
+          actions={canBook ? (
+            <>
+              <DataImportButton spec={importSpec} onDone={() => void load()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50" />
+              <HotelButton onClick={() => navigate("/hotel/reservations/new")}><CalendarPlus className="h-4 w-4" />{t("حجز جديد")}</HotelButton>
+            </>
+          ) : undefined}
         />
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

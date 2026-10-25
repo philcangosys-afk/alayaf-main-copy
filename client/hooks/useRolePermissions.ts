@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
-import { readUserSession, type PermissionLevel, type PermissionMap } from "@/lib/authSession";
+import { POS_PERMISSION_KEYS, readUserSession, type PermissionLevel, type PermissionMap } from "@/lib/authSession";
 import { USER_SESSION_EVENT } from "@/lib/businessSession";
 
 type PermState = {
@@ -18,13 +18,23 @@ type GrantRow = { is_employee?: boolean; role_name?: string | null; permissions?
 function mergeGrants(rows: GrantRow[]): PermissionMap {
   if (rows.some((row) => row.is_employee && ADMIN_ROLES.includes(String(row.role_name ?? "")))) return { "*": "manage" };
   const merged: PermissionMap = {};
-  rows.forEach((row) => {
-    const perms = row.permissions && typeof row.permissions === "object" && !Array.isArray(row.permissions)
-      ? (row.permissions as Record<string, PermissionLevel>)
-      : {};
+  const maps = rows.map((row) => (row.permissions && typeof row.permissions === "object" && !Array.isArray(row.permissions)
+    ? (row.permissions as Record<string, PermissionLevel>)
+    : {}));
+  maps.forEach((perms) => {
     Object.entries(perms).forEach(([key, value]) => {
       if (!(key in merged) || levelOf(value) > levelOf(merged[key])) merged[key] = value;
     });
+  });
+  // S22: نقاط البيع — مستوى كل مفتاح فرعي في كل حساب (المحدد يحسم ولو «بلا وصول»، وغير المحدد يأخذ module.pos)،
+  // ثم الأعلى بين الحسابات، كما يحكم الخادم pos_can. يُكتب صريحًا فلا يعود الدمج إلى module.pos
+  POS_PERMISSION_KEYS.forEach((key) => {
+    let best = -1;
+    maps.forEach((perms) => {
+      const value = key in perms ? perms[key] : perms["module.pos"];
+      if (value !== undefined) best = Math.max(best, levelOf(value));
+    });
+    if (best >= 0) merged[key] = best === 2 ? "manage" : best === 1 ? "read" : false;
   });
   return merged;
 }

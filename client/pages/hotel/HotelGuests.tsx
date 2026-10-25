@@ -9,10 +9,14 @@ import { permissionLevelAny } from "@/lib/authSession";
 import { ID_TYPES, hotelErrorText, loadGuests, nationalAddress, optionLabel, type HotelGuest, type Option } from "@/lib/hotel";
 import GuestFormModal, { loadCustomerOptions } from "@/components/hotel/GuestFormModal";
 import { ErrorNote, HotelButton, HotelConfirm, HotelHeader, useHotelDate } from "@/components/hotel/HotelUi";
+import { DataImportButton } from "@/components/DataImportDialog";
+import { hotelGuestsImportSpec } from "@/lib/imports/hotel";
 
 /** النزلاء: بياناتهم وهويتهم وعنوانهم الوطني (للفاتورة)، والربط الاختياري بشركة من العملاء */
 export default function HotelGuests() {
-  const { t, direction, formatNumber } = useI18n();
+  const { t, direction, formatNumber, locale } = useI18n();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const importSpec = useMemo(() => hotelGuestsImportSpec(t), [locale]);
   const formatDate = useHotelDate();
   const { permissions } = useRolePermissions();
   const canManage = permissionLevelAny(permissions, ["hotel.reservations", "module.hotel"]) === "manage";
@@ -60,7 +64,12 @@ export default function HotelGuests() {
           icon={UserRound}
           title="النزلاء"
           description="سجل النزلاء. الهوية مطلوبة عند تسجيل الدخول، والعنوان الوطني الكامل يظهر في فاتورة المغادرة."
-          actions={canManage ? <HotelButton onClick={() => setEditing(null)}><Plus className="h-4 w-4" />{t("نزيل جديد")}</HotelButton> : undefined}
+          actions={canManage ? (
+            <>
+              <DataImportButton spec={importSpec} onDone={() => void load()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50" />
+              <HotelButton onClick={() => setEditing(null)}><Plus className="h-4 w-4" />{t("نزيل جديد")}</HotelButton>
+            </>
+          ) : undefined}
         />
         <ErrorNote message={error} />
         <section className="overflow-hidden rounded-xl border bg-white shadow-sm">

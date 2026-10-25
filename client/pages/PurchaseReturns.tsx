@@ -276,11 +276,17 @@ function ReturnsList({
       </FilterBar>
 
       <DataTable
-        headers={["الإجراءات", "الحالة", "الإجمالي", "السبب", "أمر الشراء", "المورد", "التاريخ", "رقم المردود"]}
+        headers={["رقم المردود", "الإجراءات", "المورد", "التاريخ", "أمر الشراء", "السبب", "الإجمالي", "الحالة"]}
         gradient="from-rose-800 to-red-900"
       >
         {returns.map((ret) => (
           <tr key={ret.id} className="border-b border-border/30 hover:bg-muted/20 transition-colors">
+            <td
+              className="px-5 py-3.5 align-middle font-semibold text-rose-600 hover:underline cursor-pointer"
+              onClick={() => onView(ret)}
+            >
+              {ret.id.slice(0, 8)}...
+            </td>
             <td className="px-5 py-3.5 align-middle">
               <div className="flex items-center gap-1">
                 <ActionBtn icon={Eye} label="عرض" color="blue" onClick={() => onView(ret)} />
@@ -303,21 +309,15 @@ function ReturnsList({
                 </button>
               </div>
             </td>
+            <td className="px-5 py-3.5 align-middle">{ret.vendor}</td>
+            <td className="px-5 py-3.5 align-middle text-muted-foreground">{ret.date}</td>
+            <td className="px-5 py-3.5 align-middle text-rose-600">{ret.poNumber || "-"}</td>
+            <td className="px-5 py-3.5 align-middle text-muted-foreground">{ret.returnReason || "-"}</td>
+            <td className="px-5 py-3.5 align-middle font-semibold text-red-600 whitespace-nowrap">{ret.total} ريال</td>
             <td className="px-5 py-3.5 align-middle">
               <span className={cn("inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold", ret.statusColor)}>
                 {ret.status}
               </span>
-            </td>
-            <td className="px-5 py-3.5 align-middle font-semibold text-red-600 whitespace-nowrap">{ret.total} ريال</td>
-            <td className="px-5 py-3.5 align-middle text-muted-foreground">{ret.returnReason || "-"}</td>
-            <td className="px-5 py-3.5 align-middle text-rose-600">{ret.poNumber || "-"}</td>
-            <td className="px-5 py-3.5 align-middle">{ret.vendor}</td>
-            <td className="px-5 py-3.5 align-middle text-muted-foreground">{ret.date}</td>
-            <td
-              className="px-5 py-3.5 align-middle font-semibold text-rose-600 hover:underline cursor-pointer"
-              onClick={() => onView(ret)}
-            >
-              {ret.id.slice(0, 8)}...
             </td>
           </tr>
         ))}

@@ -178,7 +178,7 @@ export function isSaudiOnlyPath(path: string): boolean {
 }
 
 /** صفحات المستندات التي يرفضها الخادم لمنشأة خارج السعودية حتى ملف الضريبة حسب الدولة (BILLING_COUNTRY_NOT_READY) */
-export const BILLING_PATHS = ["/sales/invoices", "/sales/credit-note", "/purchases/invoices", "/purchases/debit-notes", "/purchases/credit-notes", "/purchases/customs-declarations"];
+export const BILLING_PATHS = ["/sales/invoices", "/sales/credit-note", "/purchases/invoices", "/purchases/debit-notes", "/purchases/credit-notes", "/purchases/customs-declarations", "/pos"];
 
 export function isBillingPath(path: string): boolean {
   return BILLING_PATHS.some((prefix) => matchesPrefix(path, prefix));

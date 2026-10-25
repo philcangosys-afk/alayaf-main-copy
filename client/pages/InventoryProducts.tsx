@@ -7,6 +7,8 @@ import { toast } from "@/hooks/use-toast";
 import { selectAllRows } from "@/lib/ledgerData";
 import { inventoryErrorText } from "@/lib/inventoryErrors";
 import { parseCatalog, stockIn, stockLevel, type CatalogItem, type CatalogWarehouse } from "@/lib/itemCatalog";
+import { DataImportButton } from "@/components/DataImportDialog";
+import { productsImportSpec } from "@/lib/imports/products";
 
 type Account = { code: string; name_ar: string; parent_code: string | null };
 type Product = {
@@ -59,7 +61,7 @@ const grossOf = (net: number, rate: number) => round2(net * (1 + rate / 100));
 const netOf = (gross: number, rate: number) => round4(gross / (1 + rate / 100));
 
 export default function InventoryProducts() {
-  const { t, direction, formatNumber } = useI18n();
+  const { t, direction, formatNumber, locale } = useI18n();
   const [products, setProducts] = useState<Product[]>([]);
   const [stock, setStock] = useState<Map<string, CatalogItem> | null>(null);
   const [warehouses, setWarehouses] = useState<CatalogWarehouse[]>([]);
@@ -184,6 +186,9 @@ export default function InventoryProducts() {
       opening: pick(DEFAULT_OPENING_OFFSET_ACCOUNTS) || accounts.find((account) => account.code.startsWith("3"))?.code || "",
     };
   }, [accounts, accountsLoaded]);
+  // الاستيراد من إكسل بالحسابات الافتراضية نفسها
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const importSpec = useMemo(() => productsImportSpec(defaultAccounts, t), [defaultAccounts, locale]);
   // إن فُتح نموذج صنف جديد قبل اكتمال تحميل الدليل تُملأ الحسابات الفارغة عند وصوله
   useEffect(() => {
     if (editingId !== undefined) setOpeningOffset((current) => current || defaultAccounts.opening);
@@ -383,7 +388,10 @@ export default function InventoryProducts() {
   return <Layout><main dir={direction} className="space-y-5">
     <header className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-white p-5 shadow-sm">
       <div className="flex items-center gap-3"><div className="rounded-lg bg-emerald-50 p-2 text-emerald-700"><Boxes className="h-6 w-6" /></div><div><h1 className="text-2xl font-bold text-slate-900">{t("المنتجات والخدمات")}</h1><p className="mt-1 text-sm text-slate-500">{t("الأسعار والكميات المتوفرة، وربط الأصناف بحسابات المخزون والتكلفة والإيراد. تُختار في بنود الفواتير والعروض والأوامر.")}</p></div></div>
-      <button onClick={startNew} className="inline-flex items-center gap-2 rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white"><PackagePlus className="h-4 w-4" />{t("صنف أو خدمة جديدة")}</button>
+      <div className="flex flex-wrap items-center gap-2">
+        <DataImportButton spec={importSpec} onDone={() => void load()} />
+        <button onClick={startNew} className="inline-flex items-center gap-2 rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white"><PackagePlus className="h-4 w-4" />{t("صنف أو خدمة جديدة")}</button>
+      </div>
     </header>
 
     {error && <div className="rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}

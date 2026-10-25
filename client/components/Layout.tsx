@@ -43,6 +43,7 @@ import {
   Truck,
   CheckCircle2,
   BedDouble,
+  MonitorSmartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -55,6 +56,9 @@ import {
   permissionForHotelPath,
   permissionLevelAny,
   hotelAccessAllowed,
+  permissionForPosPath,
+  posAccessAllowed,
+  posPermissionLevel,
 } from "@/lib/authSession";
 import { entitledPermissionKeys, hasCompanyModule, moduleForPath, pathAllowedByModules } from "@/lib/companyModules";
 import HotelSidebar from "@/components/hotel/HotelSidebar";
@@ -88,6 +92,13 @@ const navSubMenus: Record<
     { label: "فواتير المبيعات", href: "/sales/invoices" },
     { label: "إشعار دائن", href: "/sales/credit-note" },
     { label: "إشعار تسليم", href: "/inventory/delivery-notes" },
+  ],
+  // S22: نقاط البيع (جزء من المحاسبة والمالية)
+  "/pos": [
+    { label: "الأجهزة والجلسة", href: "/pos" },
+    { label: "شاشة البيع", href: "/pos/sell" },
+    { label: "الجلسات", href: "/pos/sessions" },
+    { label: "إعدادات نقاط البيع", href: "/pos/settings" },
   ],
   "/purchases": [
     { label: "فواتير المشتريات", href: "/purchases/invoices" },
@@ -574,6 +585,15 @@ const itemColors: Record<
     text: "text-emerald-300",
     subBg: "bg-emerald-500/[0.06]",
     border: "border-emerald-400/20",
+  },
+  "/pos": {
+    icon: "from-sky-400 to-indigo-600",
+    active: "bg-sky-500/15 border-sky-400/25",
+    glow: "shadow-sky-500/20",
+    dot: "bg-sky-400",
+    text: "text-sky-300",
+    subBg: "bg-sky-500/[0.06]",
+    border: "border-sky-400/20",
   },
   "/hotel": {
     icon: "from-amber-300 to-rose-600",
@@ -1074,6 +1094,8 @@ function MainSidebar({
   const allNavItems: MainNavItem[] = [
     { icon: BarChart3, label: "لوحة التحكم", href: "/" },
     { icon: FileText, label: "المبيعات", href: "/sales", hasSubmenu: true },
+    // S22: نقاط البيع
+    { icon: MonitorSmartphone, label: "نقاط البيع", href: "/pos", hasSubmenu: true },
     {
       icon: ShoppingCart,
       label: "المشتريات",
@@ -1105,6 +1127,9 @@ function MainSidebar({
     return allNavItems.flatMap((item): MainNavItem[] => {
       if (item.href === "/hotel") {
         return hasCompanyModule(companyModules, "hotel") && hotelAccessAllowed(livePerms) ? [item] : [];
+      }
+      if (item.href === "/pos") {
+        return hasCompanyModule(companyModules, "accounting") && posAccessAllowed(livePerms) ? [item] : [];
       }
       if (item.href === "/hr" && !hasCompanyModule(companyModules, "hr")) {
         // بلا الموارد البشرية: الأدوار والمستخدمون وسجل النشاط للجميع، من هنا
@@ -1226,7 +1251,9 @@ function MainSidebar({
           const subItems = navSubMenus[item.href]?.filter(
             (subItem) =>
               subItem.isHeader ||
-              (checkPerm(livePerms, ...permissionForMainSubPath(subItem.href)) && (saudiCompany || !isSaudiOnlyPath(subItem.href))
+              ((subItem.href.startsWith("/pos")
+                ? posPermissionLevel(livePerms, permissionForPosPath(subItem.href)) !== "none"
+                : checkPerm(livePerms, ...permissionForMainSubPath(subItem.href))) && (saudiCompany || !isSaudiOnlyPath(subItem.href))
                 && pathAllowedByModules(companyModules, subItem.href)),
           );
           const colors = itemColors[item.href] || itemColors["/"];
@@ -1478,10 +1505,14 @@ export default function Layout({ children }: LayoutProps) {
     ? permissionForHRPath(location.pathname)
     : permissionForMainSubPath(location.pathname));
   // الحجوزات: أي مفتاح يمنح (كما في الخادم)؛ القراءة فقط إن لم يمنح أيٌّ منها الإدارة
+  // نقاط البيع: «قراءة» تمنح الميزة نفسها (البيع والمرتجع...)، فلا قراءة فقط إلا في الإعدادات لمن لا يدير الأجهزة
+  const isPosSection = location.pathname === "/pos" || location.pathname.startsWith("/pos/");
   const readOnly = isHotelSection
     ? permissionLevelAny(livePerms, permissionForHotelPath(location.pathname)) === "read"
-    : checkPerm(livePerms, ...currentPermissionKeys) &&
-      !canManagePerm(livePerms, ...currentPermissionKeys);
+    : isPosSection
+      ? location.pathname.startsWith("/pos/settings") && posPermissionLevel(livePerms, ["pos.devices"]) === "read"
+      : checkPerm(livePerms, ...currentPermissionKeys) &&
+        !canManagePerm(livePerms, ...currentPermissionKeys);
   // S15: انتهت التجربة أو الاشتراك: كل الصفحات للقراءة فقط، عدا صفحة الاشتراك (طلب الباقة)
   // وإعدادات الهيئة (الربط وتجديد الشهادة) تبقى متاحة: جداولها مستثناة في الخادم
   const subscriptionReadOnly =

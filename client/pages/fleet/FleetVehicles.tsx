@@ -6,6 +6,8 @@ import { supabase } from "@/lib/supabaseClient";
 import { toast } from "@/hooks/use-toast";
 import { canManagePerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
+import { DataImportButton } from "@/components/DataImportDialog";
+import { vehiclesImportSpec } from "@/lib/imports/fleet";
 import {
   FUEL_TYPES, OWNERSHIP_TYPES, VEHICLE_STATUSES, VEHICLE_TYPES, fleetErrorText, loadFleetDrivers, loadFleetVehicles,
   numberOf, optionLabel, type FleetDriver, type FleetVehicle, type Option,
@@ -31,7 +33,9 @@ const STATUS_CLASS: Record<string, string> = {
 };
 
 export default function FleetVehicles() {
-  const { t, direction, formatNumber } = useI18n();
+  const { t, direction, formatNumber, locale } = useI18n();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const importSpec = useMemo(() => vehiclesImportSpec(t), [locale]);
   const { permissions } = useRolePermissions();
   const canManage = canManagePerm(permissions, "fleet.vehicles", "module.fleet");
   const [vehicles, setVehicles] = useState<FleetVehicle[]>([]);
@@ -171,7 +175,12 @@ export default function FleetVehicles() {
               <p className="mt-1 text-sm text-slate-500">{t("سجل المركبات وحالتها وعدادها والسائق المعيّن، مع ربطها بالأصل الثابت ومركز التكلفة.")}</p>
             </div>
           </div>
-          {canManage && <button onClick={startNew} className="inline-flex items-center gap-2 rounded bg-sky-700 px-4 py-2 text-sm font-semibold text-white"><Plus className="h-4 w-4" />{t("مركبة جديدة")}</button>}
+          {canManage && (
+            <div className="flex flex-wrap items-center gap-2">
+              <DataImportButton spec={importSpec} onDone={() => void load()} className="inline-flex items-center gap-2 rounded border border-sky-700 bg-white px-4 py-2 text-sm font-semibold text-sky-800 hover:bg-sky-50" />
+              <button onClick={startNew} className="inline-flex items-center gap-2 rounded bg-sky-700 px-4 py-2 text-sm font-semibold text-white"><Plus className="h-4 w-4" />{t("مركبة جديدة")}</button>
+            </div>
+          )}
         </header>
 
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">

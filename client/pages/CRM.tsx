@@ -3,7 +3,7 @@ import Layout from "@/components/Layout";
 import CrmReports from "@/components/crm/CrmReports";
 import { Plus, Search, RotateCcw, Eye, Pencil, Trash2, Save, X } from "lucide-react";
 import { useLocation } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { selectAllRows } from "@/lib/ledgerData";
 import { normalizePartyName, partyErrorText } from "@/lib/partyErrors";
@@ -11,6 +11,8 @@ import { toast } from "@/hooks/use-toast";
 import { useI18n } from "@/i18n";
 import { checkPerm } from "@/lib/authSession";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
+import { DataImportButton } from "@/components/DataImportDialog";
+import { partiesImportSpec } from "@/lib/imports/parties";
 
 type PartyRow = {
   id: string;
@@ -326,7 +328,7 @@ const emptyForm = (isVendor: boolean): PartyForm => ({
 });
 
 export default function CRM() {
-  const { t, direction, formatNumber } = useCrmI18n();
+  const { t, direction, formatNumber, locale } = useCrmI18n();
   const { permissions } = useRolePermissions();
   const canViewCreator = checkPerm(permissions, "audit.creator_columns");
   const location = useLocation();
@@ -346,6 +348,10 @@ export default function CRM() {
   const [typeFilter, setTypeFilter] = useState("");
   const [cityFilter, setCityFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  // يزيد بعد الاستيراد من إكسل فتُعاد قراءة القوائم
+  const [reloadKey, setReloadKey] = useState(0);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const importSpec = useMemo(() => partiesImportSpec(isVendors ? "vendor" : "customer", t), [isVendors, locale]);
 
   useEffect(() => {
     const loadTable = async (
@@ -378,7 +384,7 @@ export default function CRM() {
       loadTable("customers", setCustomerRows),
       loadTable("vendors", setVendorRows),
     ]);
-  }, []);
+  }, [reloadKey]);
 
   // أسماء المنشئين تُجلب منفصلة عن تحميل الصفوف (وللصفوف المضافة لاحقًا)، حتى لا يطغى تحميل سابق بلا أسماء على اللاحق
   const [creatorLabels, setCreatorLabels] = useState<Record<string, string>>({});
@@ -881,14 +887,17 @@ export default function CRM() {
             <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
             <p className="mt-2 text-sm text-muted-foreground">{description}</p>
           </div>
-          <button
-            onClick={openCreateForm}
-            disabled={isReports}
-            className="inline-flex items-center gap-2 rounded-lg bg-success px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-success/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Plus className="h-4 w-4" />
-            {actionLabel}
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            {!isReports && <DataImportButton spec={importSpec} onDone={() => setReloadKey((key) => key + 1)} />}
+            <button
+              onClick={openCreateForm}
+              disabled={isReports}
+              className="inline-flex items-center gap-2 rounded-lg bg-success px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-success/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <Plus className="h-4 w-4" />
+              {actionLabel}
+            </button>
+          </div>
         </div>
 
         {!isReports && isFormOpen ? (

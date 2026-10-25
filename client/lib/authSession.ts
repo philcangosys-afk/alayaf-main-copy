@@ -90,6 +90,7 @@ export function permissionForMainPath(path: string): string | null {
   if (path.startsWith("/purchases")) return "module.purchases";
   if (path.startsWith("/hr")) return "module.hr";
   if (path.startsWith("/hotel")) return "module.hotel";
+  if (path.startsWith("/pos")) return "module.pos";
   if (path.startsWith("/crm")) return "module.crm";
   if (path.startsWith("/expenses")) return "module.accounting";
   if (path.startsWith("/inventory")) return "module.inventory";
@@ -171,6 +172,41 @@ export function permissionForHotelPath(path: string): string[] {
   if (path.startsWith("/hotel/setup") || path.startsWith("/hotel/settings")) return ["hotel.setup", "module.hotel"];
   // لوحة الاستقبال: أي صلاحية حجوزات
   return ["module.hotel", ...HOTEL_PERMISSION_KEYS];
+}
+
+/** S22: نقاط البيع (جزء من المحاسبة والمالية). مستوى «قراءة» يمنح الميزة نفسها (البيع، المرتجع...) و«إدارة» يزيدها */
+export const POS_PERMISSION_KEYS = ["pos.sell", "pos.price_change", "pos.discount", "pos.returns", "pos.cash", "pos.sessions", "pos.devices"] as const;
+
+/** مفاتيح صفحة نقاط البيع (أي مفتاح يمنح، كما في الخادم pos_require)؛ تُقرأ بـ posPermissionLevel */
+export function permissionForPosPath(path: string): string[] {
+  if (path.startsWith("/pos/sell")) return ["pos.sell"];
+  if (path.startsWith("/pos/sessions")) return ["pos.sell", "pos.sessions"];
+  if (path.startsWith("/pos/settings")) return ["pos.devices"];
+  // الأجهزة: للبائع ومن يدير الأجهزة أو الجلسات
+  return ["pos.sell", "pos.devices", "pos.sessions"];
+}
+
+const POS_LEVEL_RANK = { none: 0, read: 1, manage: 2 } as const;
+
+/**
+ * أعلى مستوى بين مفاتيح نقاط البيع، كما في الخادم pos_can: المفتاح المحدد في الدور يحسم ولو «بلا وصول»،
+ * وغير المحدد يسري عليه مستوى module.pos (القسم الرئيسي في محرر الأدوار).
+ */
+export function posPermissionLevel(liveMap: PermissionMap, keys: readonly string[]): "none" | "read" | "manage" {
+  let best: "none" | "read" | "manage" = "none";
+  for (const key of keys) {
+    if (key === "module.pos") continue;
+    const level = Object.prototype.hasOwnProperty.call(liveMap, key)
+      ? permissionLevel(liveMap, key)
+      : permissionLevel(liveMap, "module.pos");
+    if (POS_LEVEL_RANK[level] > POS_LEVEL_RANK[best]) best = level;
+  }
+  return best;
+}
+
+/** قائمة نقاط البيع: لمن يملك البيع أو الأجهزة أو الجلسات */
+export function posAccessAllowed(liveMap: PermissionMap): boolean {
+  return posPermissionLevel(liveMap, ["pos.sell", "pos.devices", "pos.sessions"]) !== "none";
 }
 
 /** صلاحية قراءة على أي مفتاح من المفاتيح (لا الأول الموجود فقط)، كما يحكم الخادم business_permission_allowed */

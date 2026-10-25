@@ -571,13 +571,13 @@ function QuotationsList({
 
       <DataTable
         headers={[
-          t("الإجراءات"),
-          t("الحالة"),
-          t("الإجمالي"),
-          t("العميل"),
-          t("تاريخ الصلاحية"),
-          t("تاريخ العرض"),
           t("رقم العرض"),
+          t("الإجراءات"),
+          t("العميل"),
+          t("تاريخ العرض"),
+          t("تاريخ الصلاحية"),
+          t("الإجمالي"),
+          t("الحالة"),
         ]}
         gradient="from-[#1e293b] to-[#334155]"
       >
@@ -586,6 +586,7 @@ function QuotationsList({
             key={row.id}
             className={cn("hover:bg-muted/30", idx % 2 !== 0 && "bg-muted/10")}
           >
+            <td className="px-5 py-3.5 font-bold text-primary">{row.id}</td>
             <td className="px-5 py-3.5 align-middle">
               <div className="flex items-center gap-1.5 flex-wrap">
                 <ActionBtn
@@ -633,6 +634,20 @@ function QuotationsList({
                 )}
               </div>
             </td>
+            <td className="px-5 py-3.5">{row.customer || "-"}</td>
+            <td className="px-5 py-3.5 text-muted-foreground">
+              {row.date ? formatDate(row.date) : "-"}
+            </td>
+            <td className="px-5 py-3.5 text-muted-foreground">
+              {row.validity ? formatDate(row.validity) : "-"}
+            </td>
+            <td className="px-5 py-3.5 font-bold text-primary whitespace-nowrap">
+              {formatNumber(parseCurrency(row.total), {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}{" "}
+              {t("ريال")}
+            </td>
             <td className="px-5 py-3.5" style={{ textAlign: "start" }}>
               <span
                 className={cn(
@@ -648,21 +663,6 @@ function QuotationsList({
                 </span>
               )}
             </td>
-            <td className="px-5 py-3.5 font-bold text-primary whitespace-nowrap">
-              {formatNumber(parseCurrency(row.total), {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}{" "}
-              {t("ريال")}
-            </td>
-            <td className="px-5 py-3.5">{row.customer || "-"}</td>
-            <td className="px-5 py-3.5 text-muted-foreground">
-              {row.validity ? formatDate(row.validity) : "-"}
-            </td>
-            <td className="px-5 py-3.5 text-muted-foreground">
-              {row.date ? formatDate(row.date) : "-"}
-            </td>
-            <td className="px-5 py-3.5 font-bold text-primary">{row.id}</td>
           </tr>
         ))}
       </DataTable>

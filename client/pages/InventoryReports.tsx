@@ -153,7 +153,8 @@ export default function InventoryReports() {
 
   const report = useMemo<ReportResult>(() => {
     const matches = (productId: string, warehouseId: string) => (!productFilter || productId === productFilter) && (!warehouseFilter || warehouseId === warehouseFilter);
-    const movementTypeLabel = (movement: Movement) => movement.type === "receipt" && PRODUCTION_SOURCES.has(movement.sourceTable) ? t("استلام إنتاج") : t(({ receipt: "استلام مخزون", issue: "صرف مخزون", transfer_in: "تحويل وارد", transfer_out: "تحويل صادر", adjustment_in: "تسوية فائض", adjustment_out: "تسوية عجز", opening: "رصيد افتتاحي" } as Record<string, string>)[movement.type] ?? movement.type);
+    // الإشعارات: استلام = مرتجع مبيعات مع الإشعار الدائن (S21)، وصرف = مرتجع للمورد مع إشعار المورد الدائن
+    const movementTypeLabel = (movement: Movement) => movement.sourceTable === "invoice_adjustment_notes" ? t(movement.type === "receipt" ? "مرتجع مبيعات" : "مرتجع مشتريات") : movement.type === "receipt" && PRODUCTION_SOURCES.has(movement.sourceTable) ? t("استلام إنتاج") : t(({ receipt: "استلام مخزون", issue: "صرف مخزون", transfer_in: "تحويل وارد", transfer_out: "تحويل صادر", adjustment_in: "تسوية فائض", adjustment_out: "تسوية عجز", opening: "رصيد افتتاحي" } as Record<string, string>)[movement.type] ?? movement.type);
     const statusText = (status: string) => t(STATUS_LABELS[status] ?? status);
     const periodMovements = movements.filter((movement) => movement.date >= dateFrom && movement.date <= dateTo && matches(movement.productId, movement.warehouseId));
     const openingByKey = new Map<string, { quantity: number; value: number }>();

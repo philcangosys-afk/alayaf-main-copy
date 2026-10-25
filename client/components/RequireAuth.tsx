@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import {
   checkPerm, hotelAccessAllowed, permissionForHotelPath, permissionForHRPath, permissionForMainPath, permissionForMainSubPath,
+  permissionForPosPath, posAccessAllowed, posPermissionLevel,
   permissionLevelAny, readUserSession,
 } from "@/lib/authSession";
 import { useCompany } from "@/lib/companyContext";
@@ -140,6 +141,14 @@ export default function RequireAuth() {
     const allowed = location.pathname === "/hotel" || location.pathname === "/hotel/"
       ? hotelAccessAllowed(permissions)
       : permissionLevelAny(permissions, permissionForHotelPath(location.pathname)) !== "none";
+    return allowed ? <Outlet /> : <Navigate to="/" replace />;
+  }
+
+  // S22: نقاط البيع: أي مفتاح يمنح (كما في الخادم)، وصفحة الأجهزة لمن يملك أي صلاحية فيها
+  if (location.pathname === "/pos" || location.pathname.startsWith("/pos/")) {
+    const allowed = location.pathname === "/pos" || location.pathname === "/pos/"
+      ? posAccessAllowed(permissions)
+      : posPermissionLevel(permissions, permissionForPosPath(location.pathname)) !== "none";
     return allowed ? <Outlet /> : <Navigate to="/" replace />;
   }
 

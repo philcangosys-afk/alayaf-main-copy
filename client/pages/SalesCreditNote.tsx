@@ -50,7 +50,20 @@ const salesNoteErrorMessages: Array<[string, string]> = [
   ["SALES_NOTE_REASON_INVALID_CHARS", "سبب الإشعار لا يقبل الرموز < > & ولا محارف التحكم غير المرئية"],
   ["SALES_NOTE_INVALID_CHARS", "وصف أحد البنود يحتوي محارف تحكم غير مرئية لا يقبلها ملف الهيئة؛ أعد كتابة النص"],
   ["ZATCA_RESEND_PERMISSION_REQUIRED", "إعادة الإرسال تتطلب صلاحية إدارة فواتير المبيعات"],
+  // S21: الإرجاع للمخزون مع الإشعار الدائن
+  ["SALES_CREDIT_STOCK_LINE_EXCEEDS", "الكمية المُرجعة للمخزون أكبر من المتبقي في بند الفاتورة"],
+  ["SALES_CREDIT_STOCK_EXCEEDS_ISSUED", "الكمية المُرجعة للمخزون أكبر مما صُرف من الصنف على هذه الفاتورة، أو لم يُصرف منه شيء معها"],
+  ["SALES_CREDIT_STOCK_PRICE_REDUCTION", "الإرجاع للمخزون بنسبة 100% فقط؛ التخفيض في السعر لا يُرجع كمية"],
+  ["SALES_CREDIT_STOCK_NOT_STOCK_ITEM", "الإرجاع للمخزون لبنود المنتجات المخزنية فقط"],
+  ["SALES_CREDIT_STOCK_PRODUCT_INACTIVE", "الصنف موقوف؛ فعّله من بطاقة الصنف، أو ألغِ الإرجاع للمخزون لهذا البند"],
+  ["SALES_CREDIT_STOCK_WAREHOUSE_INACTIVE", "المستودع الذي صُرف منه الصنف موقوف؛ فعّله، أو ألغِ الإرجاع للمخزون لهذا البند"],
+  ["SALES_CREDIT_STOCK_DUPLICATE_LINE", "بند الفاتورة مكرر في الإشعار"],
+  ["SALES_CREDIT_STOCK_LINE_INVALID", "بيانات الإرجاع للمخزون غير صالحة؛ أعد اختيار الفاتورة"],
+  ["SALES_CREDIT_STOCK_CONTEXT_INVALID", "بيانات الإرجاع للمخزون غير صالحة؛ أعد اختيار الفاتورة"],
+  ["INVENTORY_ASSET_ACCOUNT_CLASS_INVALID", "حساب المخزون في بطاقة الصنف ليس من الأصول (يبدأ بالرقم 1)"],
 ];
+// الكمية المتاحة في رسالة الإرجاع للمخزون (available=…)
+const stockErrorAvailable = (message: string) => message.match(/SALES_CREDIT_STOCK_[A-Z_]+:.*available=([0-9.]+)/)?.[1] ?? "";
 // نتيجة zatca_resend_state: متى تجوز إعادة الإرسال
 const zatcaResendStateMessages: Record<string, string> = {
   accepted: "المستند مقبول لدى الهيئة؛ لا حاجة لإعادة الإرسال",
@@ -250,6 +263,34 @@ const creditNoteTranslations: Record<string, string> = {
   "قيمة الإشعار أكبر من المتبقي للبند": "The note amount exceeds the line's remaining amount",
   المتبقي: "Remaining",
   "الإشعار أكبر من رصيد الفاتورة": "The note exceeds the invoice balance",
+  "الكمية المُرجعة للمخزون أكبر من المتبقي في بند الفاتورة": "The quantity returned to stock exceeds what remains on the invoice line",
+  "الكمية المُرجعة للمخزون أكبر مما صُرف من الصنف على هذه الفاتورة، أو لم يُصرف منه شيء معها":
+    "The quantity returned to stock exceeds what was issued for this item on the invoice, or none was issued with it",
+  "الإرجاع للمخزون بنسبة 100% فقط؛ التخفيض في السعر لا يُرجع كمية": "Return to stock is for 100% lines only; a price reduction returns no quantity",
+  "الإرجاع للمخزون لبنود المنتجات المخزنية فقط": "Only stock product lines can be returned to stock",
+  "الصنف موقوف؛ فعّله من بطاقة الصنف، أو ألغِ الإرجاع للمخزون لهذا البند":
+    "The item is inactive; activate it from the item card, or untick return to stock for this line",
+  "المستودع الذي صُرف منه الصنف موقوف؛ فعّله، أو ألغِ الإرجاع للمخزون لهذا البند":
+    "The warehouse the item was issued from is inactive; activate it, or untick return to stock for this line",
+  "بند الفاتورة مكرر في الإشعار": "The invoice line is repeated in the note",
+  "بيانات الإرجاع للمخزون غير صالحة؛ أعد اختيار الفاتورة": "Invalid return-to-stock data; select the invoice again",
+  "حساب المخزون في بطاقة الصنف ليس من الأصول (يبدأ بالرقم 1)": "The item's inventory account is not an asset account (must start with 1)",
+  "الكمية المُرجعة للمخزون أكبر من المتاح للإرجاع": "The quantity returned to stock exceeds what can be returned",
+  "جارٍ تحميل بيانات الإرجاع للمخزون": "Loading return-to-stock data",
+  "انتظر لحظة ثم احفظ": "Wait a moment, then save",
+  "تعذر تحميل بيانات الإرجاع للمخزون": "Could not load return-to-stock data",
+  "اضغط «إعادة المحاولة» فوق البنود. لم يُحفظ شيء.": "Press “Retry” above the lines. Nothing was saved.",
+  "تعذر تحميل بيانات الإرجاع للمخزون؛ لا يُحفظ الإشعار من البنود حتى تُحمَّل.":
+    "Could not load return-to-stock data; the note cannot be saved from the lines until it loads.",
+  "إعادة المحاولة": "Retry",
+  "إرجاع للمخزون": "Return to stock",
+  "يُرجع للمخزون": "Returned to stock",
+  "لا يُرجع": "Not returned",
+  "متاح للمخزون": "Returnable",
+  "الصنف موقوف": "Item inactive",
+  "تخفيض سعر": "Price reduction",
+  "بنود المنتجات المخزنية بنسبة 100% تعيد كميتها للمخزون بتكلفة صرفها على الفاتورة. ألغِ التحديد إن لم تُستلم البضاعة.":
+    "Stock product lines at 100% return their quantity to stock at the cost issued on the invoice. Untick if the goods were not received back.",
 };
 
 type AccountingAccount = {
@@ -270,6 +311,8 @@ type CreditNoteItem = {
   sourceQuantity?: number;
   sourceUnitPrice?: number;
   percent?: number;
+  // S21: يعيد كمية البند للمخزون عند الترحيل (بند منتج مخزني بنسبة 100%)
+  returnToStock?: boolean;
 };
 
 // بند الفاتورة الأصلية كما حُفظ (للعرض فقط في الإشعار الدائن)
@@ -284,7 +327,17 @@ type OriginalInvoiceLine = {
 };
 
 // ما يُدخله المستخدم لكل بند: الكمية المُشعَر بها ونسبتها من سعر الوحدة
-type CreditLineInput = { quantity: string; percent: string };
+type CreditLineInput = { quantity: string; percent: string; restock?: boolean };
+
+// S21: لكل بند منتج مخزني في الفاتورة: ما أُرجع منه للمخزون، والمصروف من صنفه على الفاتورة وما أُرجع منه
+type StockLineInfo = {
+  line: number;
+  productId: string;
+  active: boolean;
+  lineReturned: number;
+  productIssued: number;
+  productReturned: number;
+};
 
 type SavedCreditNote = {
   id: string;
@@ -351,6 +404,7 @@ const creditItemFromLine = (
   quantity: number,
   percent: number,
   fallbackAccount: string,
+  returnToStock = false,
 ): CreditNoteItem => {
   // الإرجاع بسعر الفاتورة نفسه؛ التخفيض بنسبة من السعر مقرّبًا إلى هللة
   const unitPrice = percent >= 100 ? line.unitPrice : roundHalala((line.unitPrice * percent) / 100);
@@ -367,6 +421,7 @@ const creditItemFromLine = (
     sourceQuantity: line.quantity,
     sourceUnitPrice: line.unitPrice,
     percent,
+    ...(returnToStock ? { returnToStock: true } : {}),
   };
 };
 
@@ -461,6 +516,11 @@ export default function SalesCreditNote() {
   );
   // الإشعار الدائن على فاتورة لها بنود: الكمية والنسبة لكل بند (المفتاح رقم البند في الفاتورة)
   const [creditLines, setCreditLines] = useState<Record<number, CreditLineInput>>({});
+  // S21: سياق الإرجاع للمخزون للفاتورة المختارة (فارغ إن لم يُطبَّق S21 أو لا منتجات مخزنية)
+  const [stockLines, setStockLines] = useState<Map<number, StockLineInfo>>(new Map());
+  // unavailable: الدالة غير موجودة (S21 لم يُطبَّق) فيبقى الإشعار ماليًا كما كان؛ error: لا يُحفظ من البنود حتى تُحمَّل
+  const [stockState, setStockState] = useState<"idle" | "loading" | "ready" | "unavailable" | "error">("idle");
+  const [stockRetry, setStockRetry] = useState(0);
 
   useEffect(() => {
     const load = async () => {
@@ -587,6 +647,65 @@ export default function SalesCreditNote() {
   }, []);
 
   const selectedInvoice = invoices.find((invoice) => invoice.id === form.originalInvoiceId);
+  useEffect(() => {
+    setStockLines(new Map());
+    if (form.noteType !== "sales_credit" || !form.originalInvoiceId) {
+      setStockState("idle");
+      return;
+    }
+    setStockState("loading");
+    let cancelled = false;
+    void (async () => {
+      const { data, error } = await supabase.rpc("sales_credit_stock_context", {
+        p_invoice_id: form.originalInvoiceId,
+      });
+      if (cancelled) return;
+      if (error) {
+        const missing =
+          error.code === "PGRST202" ||
+          (/sales_credit_stock_context/.test(String(error.message ?? "")) &&
+            /could not find|does not exist/i.test(String(error.message ?? "")));
+        setStockState(missing ? "unavailable" : "error");
+        return;
+      }
+      if (!Array.isArray(data)) {
+        setStockState("error");
+        return;
+      }
+      const next = new Map<number, StockLineInfo>();
+      for (const row of data as Array<Record<string, unknown>>) {
+        const line = Number(row.line);
+        if (!Number.isInteger(line)) continue;
+        next.set(line, {
+          line,
+          productId: String(row.productId ?? ""),
+          active: row.active === true,
+          lineReturned: toAmount(row.lineReturned),
+          productIssued: toAmount(row.productIssued),
+          productReturned: toAmount(row.productReturned),
+        });
+      }
+      setStockLines(next);
+      setStockState("ready");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [form.noteType, form.originalInvoiceId, savedNotes.length, stockRetry]);
+  // الكمية التي يجوز إرجاعها للمخزون من البند: المتبقي منه، ولا تتجاوز المصروف من صنفه ناقص المُرجع
+  const stockAvailable = (line: OriginalInvoiceLine) => {
+    const info = stockLines.get(line.index);
+    if (!info) return 0;
+    return Math.max(
+      Math.min(line.quantity - info.lineReturned, info.productIssued - info.productReturned),
+      0,
+    );
+  };
+  // الإرجاع للمخزون: منتج مخزني نشط، بنسبة 100%، وله متاح؛ مفعّل افتراضيًا ويُلغى من خانة البند
+  const restockFor = (line: OriginalInvoiceLine, input: CreditLineInput | undefined, percent: number) => {
+    const info = stockLines.get(line.index);
+    return Boolean(info?.active) && percent >= 100 && stockAvailable(line) > 0 && (input?.restock ?? true);
+  };
   // الإشعار الدائن من بنود الفاتورة (البنود مقفلة، والمدخل الكمية والنسبة)؛ المدين أو الفاتورة بلا بنود: بنود حرة
   const fromInvoiceLines =
     form.noteType === "sales_credit" && Boolean(selectedInvoice) && (selectedInvoice?.lines.length ?? 0) > 0;
@@ -626,10 +745,11 @@ export default function SalesCreditNote() {
         const quantity = Number(input?.quantity) || 0;
         const percent = input?.percent === undefined || input.percent === "" ? 100 : Number(input.percent) || 0;
         if (!(quantity > 0) || !(percent > 0)) return null;
-        return creditItemFromLine(line, quantity, percent, defaultRevenueAccount);
+        return creditItemFromLine(line, quantity, percent, defaultRevenueAccount, restockFor(line, input, percent));
       })
       .filter((item): item is CreditNoteItem => item !== null);
-  }, [fromInvoiceLines, selectedInvoice, creditLines, defaultRevenueAccount]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fromInvoiceLines, selectedInvoice, creditLines, defaultRevenueAccount, stockLines]);
   const effectiveItems = fromInvoiceLines ? invoiceLineItems : form.items;
   const subtotal = useMemo(
     () => effectiveItems.reduce((sum, item) => sum + itemNet(item), 0),
@@ -640,19 +760,23 @@ export default function SalesCreditNote() {
   const setCreditLine = (index: number, changes: Partial<CreditLineInput>) =>
     setCreditLines((current) => ({
       ...current,
-      [index]: { quantity: current[index]?.quantity ?? "", percent: current[index]?.percent ?? "100", ...changes },
+      // يحفظ اختيار الإرجاع للمخزون عند تعديل الكمية أو النسبة
+      [index]: { quantity: "", percent: "100", ...current[index], ...changes },
     }));
   // إرجاع كامل: كل بند بكميته المتبقية وبكامل السعر
   const creditAllLines = () => {
     if (!selectedInvoice) return;
-    const next: Record<number, CreditLineInput> = {};
-    for (const line of selectedInvoice.lines) {
-      const available = lineAvailable(line);
-      if (available.quantity > 0 && available.amount > 0) {
-        next[line.index] = { quantity: String(available.quantity), percent: "100" };
+    setCreditLines((current) => {
+      const next: Record<number, CreditLineInput> = {};
+      for (const line of selectedInvoice.lines) {
+        const available = lineAvailable(line);
+        if (available.quantity > 0 && available.amount > 0) {
+          // اختيار الإرجاع للمخزون لكل بند يبقى كما هو
+          next[line.index] = { ...current[line.index], quantity: String(available.quantity), percent: "100" };
+        }
       }
-    }
-    setCreditLines(next);
+      return next;
+    });
   };
 
   const updateItem = (
@@ -722,6 +846,19 @@ export default function SalesCreditNote() {
       });
       return;
     }
+    // الإشعار الدائن من البنود: لا يُحفظ قبل معرفة ما يجوز إرجاعه للمخزون
+    if (fromInvoiceLines && stockState === "loading") {
+      toast({ title: t("جارٍ تحميل بيانات الإرجاع للمخزون"), description: t("انتظر لحظة ثم احفظ") });
+      return;
+    }
+    if (fromInvoiceLines && stockState === "error") {
+      toast({
+        title: t("تعذر تحميل بيانات الإرجاع للمخزون"),
+        description: t("اضغط «إعادة المحاولة» فوق البنود. لم يُحفظ شيء."),
+        variant: "destructive",
+      });
+      return;
+    }
     // الإشعار الدائن من البنود: لا يتجاوز كمية البند ولا قيمته بعد ما أُشعر به سابقًا، ولا رصيد الفاتورة
     if (fromInvoiceLines && selectedInvoice) {
       for (const line of selectedInvoice.lines) {
@@ -745,10 +882,42 @@ export default function SalesCreditNote() {
           });
           return;
         }
+        if (item.returnToStock && item.quantity > stockAvailable(line) + 1e-9) {
+          toast({
+            title: t("الكمية المُرجعة للمخزون أكبر من المتاح للإرجاع"),
+            description: `${line.description} — ${t("متاح للمخزون")}: ${formatNumber(stockAvailable(line))}`,
+            variant: "destructive",
+          });
+          return;
+        }
         if (itemNet(item) > available.amount + 0.005) {
           toast({
             title: t("قيمة الإشعار أكبر من المتبقي للبند"),
             description: `${line.description} — ${t("المتبقي")}: ${formatNumber(available.amount, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+      // الصنف نفسه في أكثر من بند: مجموع المُرجع لا يتجاوز المصروف منه على الفاتورة ناقص ما أُرجع
+      const restockByProduct = new Map<string, { quantity: number; limit: number; description: string }>();
+      for (const item of invoiceLineItems) {
+        if (!item.returnToStock || typeof item.sourceLine !== "number") continue;
+        const info = stockLines.get(item.sourceLine);
+        if (!info) continue;
+        const current = restockByProduct.get(info.productId) ?? {
+          quantity: 0,
+          limit: Math.max(info.productIssued - info.productReturned, 0),
+          description: item.description,
+        };
+        current.quantity += item.quantity;
+        restockByProduct.set(info.productId, current);
+      }
+      for (const entry of restockByProduct.values()) {
+        if (entry.quantity > entry.limit + 1e-9) {
+          toast({
+            title: t("الكمية المُرجعة للمخزون أكبر مما صُرف من الصنف على هذه الفاتورة، أو لم يُصرف منه شيء معها"),
+            description: `${entry.description} — ${t("متاح للمخزون")}: ${formatNumber(entry.limit)}`,
             variant: "destructive",
           });
           return;
@@ -887,9 +1056,11 @@ export default function SalesCreditNote() {
           });
           return;
         }
+        const errorMessage = String(error?.message ?? "");
+        const availableText = stockErrorAvailable(errorMessage);
         toast({
           title: t("تعذر ترحيل الإشعار"),
-          description: t(salesNoteErrorText(String(error?.message ?? ""))),
+          description: `${t(salesNoteErrorText(errorMessage))}${availableText ? ` — ${t("متاح للمخزون")}: ${formatNumber(Number(availableText))}` : ""}`,
           variant: "destructive",
         });
         return;
@@ -1558,6 +1729,11 @@ export default function SalesCreditNote() {
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="text-[12px] text-muted-foreground">
                       {t("بنود الفاتورة كما صدرت (لا تُعدَّل). أدخل الكمية التي يشملها الإشعار، والنسبة من سعر الوحدة: 100% إرجاع، وأقل منها تخفيض في السعر.")}
+                      {stockLines.size > 0 && (
+                        <span className="mt-1 block">
+                          {t("بنود المنتجات المخزنية بنسبة 100% تعيد كميتها للمخزون بتكلفة صرفها على الفاتورة. ألغِ التحديد إن لم تُستلم البضاعة.")}
+                        </span>
+                      )}
                     </p>
                     <button
                       type="button"
@@ -1567,6 +1743,18 @@ export default function SalesCreditNote() {
                       {t("إرجاع كامل الكميات المتبقية")}
                     </button>
                   </div>
+                  {stockState === "error" && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800">
+                      <span>{t("تعذر تحميل بيانات الإرجاع للمخزون؛ لا يُحفظ الإشعار من البنود حتى تُحمَّل.")}</span>
+                      <button
+                        type="button"
+                        onClick={() => setStockRetry((value) => value + 1)}
+                        className="rounded-md border border-rose-300 bg-white px-3 py-1 font-semibold hover:bg-rose-100"
+                      >
+                        {t("إعادة المحاولة")}
+                      </button>
+                    </div>
+                  )}
                   {previousCredits.unlinkedAmount > 0.005 && (
                     <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
                       {t("على الفاتورة إشعارات دائنة سابقة غير مرتبطة بالبنود")}:{" "}
@@ -1588,6 +1776,7 @@ export default function SalesCreditNote() {
                           <th className="px-3 py-2">{t("أُشعر به سابقًا")}</th>
                           <th className="px-3 py-2">{t("كمية الإشعار")}</th>
                           <th className="px-3 py-2">{t("النسبة من السعر %")}</th>
+                          {stockLines.size > 0 && <th className="px-3 py-2">{t("إرجاع للمخزون")}</th>}
                           <th className="px-3 py-2">{t("قيمة الإشعار")}</th>
                         </tr>
                       </thead>
@@ -1598,6 +1787,11 @@ export default function SalesCreditNote() {
                           const available = lineAvailable(line);
                           const item = invoiceLineItems.find((candidate) => candidate.sourceLine === line.index);
                           const exhausted = available.amount <= 0.005;
+                          const stockInfo = stockLines.get(line.index);
+                          const linePercent =
+                            input?.percent === undefined || input.percent === "" ? 100 : Number(input.percent) || 0;
+                          const lineStockAvailable = stockAvailable(line);
+                          const restock = restockFor(line, input, linePercent);
                           return (
                             <tr key={line.index} className={`border-t border-border ${exhausted ? "bg-muted/30 text-muted-foreground" : ""}`}>
                               <td className="px-3 py-2">
@@ -1649,6 +1843,35 @@ export default function SalesCreditNote() {
                                   className="h-9 w-20 rounded-md border border-border bg-background px-2 disabled:bg-muted/40"
                                 />
                               </td>
+                              {stockLines.size > 0 && (
+                                <td className="px-3 py-2 text-[12px]">
+                                  {stockInfo ? (
+                                    <>
+                                      <label className="inline-flex items-center gap-1.5">
+                                        <input
+                                          type="checkbox"
+                                          checked={restock}
+                                          disabled={
+                                            exhausted || !stockInfo.active || linePercent < 100 || lineStockAvailable <= 0
+                                          }
+                                          onChange={(e) => setCreditLine(line.index, { restock: e.target.checked })}
+                                          className="h-4 w-4"
+                                        />
+                                        <span>{t(restock ? "يُرجع للمخزون" : "لا يُرجع")}</span>
+                                      </label>
+                                      <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                        {!stockInfo.active
+                                          ? t("الصنف موقوف")
+                                          : linePercent < 100
+                                            ? t("تخفيض سعر")
+                                            : `${t("متاح للمخزون")}: ${formatNumber(lineStockAvailable)}`}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                              )}
                               <td className="px-3 py-2 font-semibold">
                                 {item
                                   ? `${formatNumber(itemNet(item), { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${t("﷼")}`
