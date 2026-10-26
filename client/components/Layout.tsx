@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  type PermissionMap,
   readUserSession,
   checkPerm,
   canManagePerm,
@@ -60,7 +61,7 @@ import {
   posAccessAllowed,
   posPermissionLevel,
 } from "@/lib/authSession";
-import { entitledPermissionKeys, hasCompanyModule, moduleForPath, pathAllowedByModules } from "@/lib/companyModules";
+import { type CompanyModule, entitledPermissionKeys, hasCompanyModule, moduleForPath, pathAllowedByModules } from "@/lib/companyModules";
 import HotelSidebar from "@/components/hotel/HotelSidebar";
 import { useRolePermissions } from "@/hooks/useRolePermissions";
 import ReadOnlyBoundary from "@/components/permissions/ReadOnlyBoundary";
@@ -150,6 +151,28 @@ const navSubMenus: Record<
   ],
   "/ai": [{ label: "المساعد الذكي", href: "/ai/assistant" }],
 };
+
+/* ── المستخدمون والصلاحيات للمنشأة بلا الموارد البشرية: مجموعة داخل «المحاسبة والمالية» ──
+   الصفحات نفسها (المسارات تحت /hr)، لكنها تُفتح بالقائمة الرئيسية لا بلوحة الموارد البشرية.
+   مع الموارد البشرية تبقى في لوحتها كما كانت. */
+const USERS_ADMIN_PATHS = ["/hr/permissions", "/hr/user-logs", "/hr/organization/branches"];
+const isUsersAdminPath = (path: string) =>
+  USERS_ADMIN_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+const accountingUsersMenu: { label: string; href: string; isHeader?: boolean }[] = [
+  { label: "المستخدمون والصلاحيات", href: "", isHeader: true },
+  { label: "المستخدمون", href: "/hr/permissions/special-user" },
+  { label: "قائمة أدوار المستخدمين", href: "/hr/permissions/roles" },
+  { label: "إضافة دور جديد", href: "/hr/permissions/add-role" },
+  { label: "سجلات المستخدمين", href: "/hr/user-logs" },
+  { label: "الفروع", href: "/hr/organization/branches" },
+];
+
+/** بلا الموارد البشرية ولمن يرى «المحاسبة والمالية»: المستخدمون والصلاحيات تحتها. غير ذلك: عنصر مستقل كما كان */
+function usersUnderAccounting(modules: CompanyModule[] | null | undefined, perms: PermissionMap): boolean {
+  return !hasCompanyModule(modules, "hr")
+    && hasCompanyModule(modules, "accounting")
+    && checkPerm(perms, permissionForMainPath("/expenses") ?? "module.accounting");
+}
 
 /* ── HR nav item types ── */
 type HRNavItem = {
@@ -1080,9 +1103,18 @@ function MainSidebar({
     }
   };
 
-  const activeSubmenuParent = Object.entries(navSubMenus).find(([, subItems]) =>
-    subItems.some((subItem) => subItem.href === location.pathname),
-  )?.[0];
+  // بلا الموارد البشرية: المستخدمون والصلاحيات مجموعة داخل «المحاسبة والمالية»
+  const usersInAccounting = usersUnderAccounting(companyModules, livePerms);
+  const subMenuFor = (href: string) =>
+    href === "/expenses" && usersInAccounting
+      ? [...navSubMenus["/expenses"], ...accountingUsersMenu]
+      : navSubMenus[href];
+
+  const activeSubmenuParent = usersInAccounting && isUsersAdminPath(location.pathname)
+    ? "/expenses"
+    : Object.entries(navSubMenus).find(([, subItems]) =>
+        subItems.some((subItem) => subItem.href === location.pathname),
+      )?.[0];
 
   const isActive = (path: string) =>
     activeSubmenuParent
@@ -1132,7 +1164,9 @@ function MainSidebar({
         return hasCompanyModule(companyModules, "accounting") && posAccessAllowed(livePerms) ? [item] : [];
       }
       if (item.href === "/hr" && !hasCompanyModule(companyModules, "hr")) {
-        // بلا الموارد البشرية: الأدوار والمستخدمون وسجل النشاط للجميع، من هنا
+        // بلا الموارد البشرية: المستخدمون والصلاحيات داخل «المحاسبة والمالية» لمن يراها،
+        // وإلا عنصر مستقل هنا (الأدوار والمستخدمون وسجل النشاط للجميع)
+        if (usersInAccounting) return [];
         const target = ["/hr/permissions/roles", "/hr/permissions/special-user", "/hr/user-logs"]
           .find((href) => checkPerm(livePerms, ...entitledPermissionKeys(companyModules, permissionForHRPath(href))));
         return target ? [{ ...item, icon: ShieldCheck, label: "المستخدمون والصلاحيات", target }] : [];
@@ -1141,7 +1175,7 @@ function MainSidebar({
       const key = permissionForMainPath(item.href);
       return key === null || checkPerm(livePerms, key) ? [item] : [];
     });
-  }, [livePerms, companyModules]);
+  }, [livePerms, companyModules, usersInAccounting]);
 
   const lastAutoExpandedPath = useRef<string | null>(null);
 
@@ -1248,14 +1282,19 @@ function MainSidebar({
           const Icon = item.icon;
           const isItemActive = isActive(item.href);
           const isExpanded = expandedMenu === item.href && item.hasSubmenu;
-          const subItems = navSubMenus[item.href]?.filter(
+          const subItems = subMenuFor(item.href)?.filter(
             (subItem) =>
               subItem.isHeader ||
               ((subItem.href.startsWith("/pos")
                 ? posPermissionLevel(livePerms, permissionForPosPath(subItem.href)) !== "none"
-                : checkPerm(livePerms, ...permissionForMainSubPath(subItem.href))) && (saudiCompany || !isSaudiOnlyPath(subItem.href))
+                : isUsersAdminPath(subItem.href)
+                  // صفحات المستخدمين والصلاحيات: صلاحيتها كما في لوحة الموارد البشرية
+                  ? checkPerm(livePerms, ...entitledPermissionKeys(companyModules, permissionForHRPath(subItem.href)))
+                  : checkPerm(livePerms, ...permissionForMainSubPath(subItem.href))) && (saudiCompany || !isSaudiOnlyPath(subItem.href))
                 && pathAllowedByModules(companyModules, subItem.href)),
-          );
+          )
+            // العنوان بلا عناصر بعده لا يظهر
+            ?.filter((subItem, index, list) => !subItem.isHeader || (index + 1 < list.length && !list[index + 1].isHeader));
           const colors = itemColors[item.href] || itemColors["/"];
 
           // HR item navigates to /hr/dashboard directly
@@ -1364,7 +1403,8 @@ function MainSidebar({
                         </div>
                       );
                     }
-                    const isSubActive = location.pathname === subItem.href;
+                    const isSubActive = location.pathname === subItem.href
+                      || (subItem.href === "/hr/permissions/roles" && location.pathname.startsWith("/hr/permissions/edit-role/"));
                     return (
                       <button
                         key={index}
@@ -1475,7 +1515,9 @@ export default function Layout({ children }: LayoutProps) {
   });
   const [expandedMainMenu, setExpandedMainMenu] = useState<string | null>(null);
 
-  const isHRSection = location.pathname.startsWith("/hr");
+  const isHRPath = location.pathname.startsWith("/hr");
+  // بلا الموارد البشرية: صفحات المستخدمين والصلاحيات تُفتح بالقائمة الرئيسية (داخل «المحاسبة والمالية»)
+  const isHRSection = isHRPath && !(usersUnderAccounting(company.modules, livePerms) && isUsersAdminPath(location.pathname));
   // S20: الحجوزات بلوحة وقائمة مستقلة (إن كان القسم مفعّلًا؛ وإلا تظهر القائمة الرئيسية مع رسالة «غير مشمول»)
   const isHotelSection = location.pathname.startsWith("/hotel") && hasCompanyModule(company.modules, "hotel");
 
@@ -1501,7 +1543,7 @@ export default function Layout({ children }: LayoutProps) {
     localStorage.setItem(cleanupMarker, new Date().toISOString());
   }, []);
 
-  const currentPermissionKeys = entitledPermissionKeys(company.modules, isHRSection
+  const currentPermissionKeys = entitledPermissionKeys(company.modules, isHRPath
     ? permissionForHRPath(location.pathname)
     : permissionForMainSubPath(location.pathname));
   // الحجوزات: أي مفتاح يمنح (كما في الخادم)؛ القراءة فقط إن لم يمنح أيٌّ منها الإدارة
