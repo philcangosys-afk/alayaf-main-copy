@@ -5310,6 +5310,52 @@ Object.assign(translations, {
   "فاتورة رسوم إلغاء الحجز؛ الدفعات المقدمة مخصومة منها.": "Reservation cancellation fee invoice; advance payments are deducted from it.",
 });
 
+// S23: التصنيف الضريبي التلقائي وفئة ضريبة الصنف
+Object.assign(translations, {
+  "غير مصنف": "Not classified",
+  "مصنف جزئيًا": "Partly classified",
+  "تلقائي عند الترحيل": "Automatic on posting",
+  "يدوي": "Manual",
+  "تلقائي (مقفل)": "Automatic (locked)",
+  "مجموع ضريبة البنود لا يساوي ضريبة المستند (فرق أكبر من هللتين)؛ راجع المحاسب": "The lines' VAT doesn't add up to the document's VAT (a difference above 0.02); check with your accountant",
+  "صُنّف هذا المستند تلقائيًا بتوزيع فرق التقريب (هللات) على بنوده، والحفظ اليدوي لا يقبل فرقًا أكبر من هللتين؛ يبقى كما صُنّف.": "This document was classified automatically by spreading the rounding difference (halalas) over its lines. A manual save doesn't accept a difference above 0.02, so it stays as classified.",
+  "ضريبة المستند تخالف مجموع ضريبة بنوده بأكثر من هللتين، فلا يُحفظ تصنيفه يدويًا. جرّب «تصنيف تلقائي للفترة» أو راجع المحاسب.": "The document's VAT differs from its lines' VAT by more than 0.02, so its classification can't be saved manually. Try \"Classify the period automatically\" or check with your accountant.",
+  "في الفاتورة بند بلا نسبة ضريبة؛ يُصنَّف تلقائيًا بنسبة 15% كما حُسبت الفاتورة، ولا يُحفظ تصنيفه يدويًا.": "The invoice has a line without a VAT rate; it is classified automatically at 15%, as the invoice was calculated, and can't be saved manually.",
+  "التصنيف الضريبي": "VAT classification",
+  "حالة التصنيف": "Classification",
+  "استيراد": "Import",
+  "احتساب عكسي": "Reverse charge",
+  "الفئة الضريبية": "VAT category",
+  "نوع التوريد": "Supply type",
+  "تصنيف بنود الضريبة": "Classify VAT lines",
+  "حفظ التصنيف": "Save classification",
+  "يجب اختيار الفئة الضريبية ونوع التوريد لكل بند": "Choose the VAT category and supply type for every line",
+  "التصنيف التلقائي يحتاج تحديث قاعدة البيانات (S23)": "Automatic classification needs the database update (S23)",
+  "صُنّف تلقائيًا": "Classified automatically",
+  "بقي للتصنيف اليدوي": "Left for manual classification",
+  "تُصنَّف المستندات تلقائيًا عند ترحيلها: بند 15% بالنسبة الأساسية، وبند المشتريات بنسبة صفر بفئة ضريبة الصنف، أو خارج النطاق إن كان المورد غير مسجل ضريبيًا. يبقى هنا ما لا يُحدَّد تلقائيًا (مثل بند بنسبة صفر بلا فئة من مورد مسجل)، ولا يُدرج في التقرير حتى يُصنَّف. التصدير لا يُستنتج من نسبة الصفر.": "Documents are classified automatically when posted: a 15% line at the standard rate, and a zero-rated purchase line by the item's VAT category, or out of scope when the vendor isn't VAT-registered. What can't be determined automatically stays here (such as a 0% line without a category from a registered vendor) and isn't included in the report until it's classified. Exports are never inferred from a zero rate.",
+  "غير المصنفة": "Unclassified",
+  "كل المستندات": "All documents",
+  "جاري التصنيف...": "Classifying...",
+  "تصنيف تلقائي للفترة": "Classify the period automatically",
+  "من الترحيل": "From posting",
+  "مراجعة التصنيف": "Review classification",
+  "لا توجد مستندات في الفترة": "No documents in the period",
+  "صُنّف هذا المستند تلقائيًا عند ترحيله؛ عدّل الفئة عند الحاجة ثم احفظ.": "This document was classified automatically when posted; change a category if needed, then save.",
+  "عُبّئت الفئات التي حددها النظام؛ راجعها وأكمل الباقي ثم احفظ.": "The categories the system could determine are filled in; review them, complete the rest, then save.",
+  "غير محددة": "Not set",
+  "نسبة صفر": "Zero-rated",
+  "معفى": "Exempt",
+  "خارج النطاق": "Out of scope",
+  "محلي": "Domestic",
+  "النسبة الأساسية 15%": "Standard rate 15%",
+  "فئة الضريبة": "VAT category",
+  "فئة الضريبة تصنّف بند المشتريات بهذا الصنف تلقائيًا في تقارير الضريبة (نسبة صفر أو معفى أو خارج النطاق). دونها يبقى البند للتصنيف اليدوي إن كان المورد مسجلًا ضريبيًا.": "The VAT category classifies purchase lines with this item automatically in the VAT reports (zero-rated, exempt or out of scope). Without it, the line is left for manual classification when the vendor is VAT-registered.",
+  "فئة الضريبة للصنف بنسبة صفر فقط: نسبة صفر أو معفى أو خارج النطاق.": "A VAT category is for 0% items only: zero-rated, exempt or out of scope.",
+  "مرحّل وقابل للإدراج": "Posted — included",
+  "غير مرحّل — غير مدرج": "Not posted — not included",
+});
+
 /** النص بالإنجليزية أيًا كانت لغة الواجهة (لمطابقة عناوين ملف نُزّل بالإنجليزية) */
 export const englishText = (value: string): string => translations[value] ?? value;
 

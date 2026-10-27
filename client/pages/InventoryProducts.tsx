@@ -32,6 +32,8 @@ type Product = {
   // S18: طريقة إدخال السعر ونسبة الضريبة
   pricesIncludeVat: boolean;
   vatRate: number;
+  // S23: فئة الضريبة للنسبة صفر (zero_rated أو exempt أو out_of_scope)؛ فارغة = غير محددة
+  vatCategory: string;
 };
 type TypeFilter = "all" | "product" | "service";
 
@@ -46,6 +48,8 @@ const DEFAULT_OPENING_OFFSET_ACCOUNTS = ["321", "331"];
 const LEGACY_DEFAULT_ACCOUNTS = { inventory: "1151", cogs: "511", revenue: "411" };
 // نسب الضريبة المعروضة (فواتير المبيعات بنسبة 15% دائمًا)
 const VAT_RATE_OPTIONS = [15, 0];
+// S23: فئة الضريبة للصنف بنسبة صفر؛ منها يُصنَّف بند المشتريات تلقائيًا في تقارير الضريبة
+const VAT_CATEGORY_OPTIONS: Array<[string, string]> = [["", "غير محددة"], ["zero_rated", "نسبة صفر"], ["exempt", "معفى"], ["out_of_scope", "خارج النطاق"]];
 
 const toNumber = (value: unknown) => {
   const parsed = Number(value);
@@ -92,6 +96,9 @@ export default function InventoryProducts() {
   const setPurchasePrice = (text: string) => { setPurchasePriceText(text); setPurchaseBaseNet(null); };
   const [pricesIncludeVat, setPricesIncludeVat] = useState(false);
   const [vatRate, setVatRate] = useState(15);
+  const [vatCategory, setVatCategory] = useState("");
+  // الحقل يظهر بعد تطبيق S23 فقط (قبله لا يُحفظ)
+  const [vatCategorySupported, setVatCategorySupported] = useState(false);
   const [barcode, setBarcode] = useState("");
   const [reorderLevel, setReorderLevel] = useState("");
   const [description, setDescription] = useState("");
@@ -109,11 +116,13 @@ export default function InventoryProducts() {
     setLoading(true);
     setError("");
     // select("*"): الأعمدة الجديدة تُقرأ إن وُجدت، والصفحة تعمل قبلها
-    const [productResult, accountResult, catalogResult] = await Promise.all([
+    const [productResult, accountResult, catalogResult, vatCategoryProbe] = await Promise.all([
       selectAllRows((from, to) => supabase.from("inventory_products").select("*").order("sku").order("id").range(from, to)),
       selectAllRows((from, to) => supabase.from("accounting_accounts").select("code, name_ar, parent_code").order("code").range(from, to)),
       supabase.rpc("list_item_catalog", { p_include_inactive: true }),
+      supabase.from("inventory_products").select("vat_category").limit(1),
     ]);
+    setVatCategorySupported(!vatCategoryProbe.error);
     if (productResult.error) {
       setError(inventoryErrorText(productResult.error.message, t));
       setLoading(false);
@@ -146,6 +155,7 @@ export default function InventoryProducts() {
       purchaseAccountCode: String(row.purchase_account_code ?? ""),
       pricesIncludeVat: row.prices_include_vat === true,
       vatRate: row.vat_rate === null || row.vat_rate === undefined ? 15 : toNumber(row.vat_rate),
+      vatCategory: String(row.vat_category ?? ""),
     })));
     setLoading(false);
   };
@@ -207,7 +217,7 @@ export default function InventoryProducts() {
     setEditingId(undefined);
     setSku(""); setNameAr(""); setNameEn(""); setItemType("product"); setUnit("قطعة");
     setInventoryAccount(defaultAccounts.inventory); setCogsAccount(defaultAccounts.cogs); setRevenueAccount(defaultAccounts.revenue);
-    setPurchaseAccount(""); setSalePrice(""); setPurchasePrice(""); setPricesIncludeVat(false); setVatRate(15);
+    setPurchaseAccount(""); setSalePrice(""); setPurchasePrice(""); setPricesIncludeVat(false); setVatRate(15); setVatCategory("");
     setBarcode(""); setReorderLevel(""); setDescription("");
     setActive(true); setError(""); resetOpening();
   };
@@ -219,7 +229,7 @@ export default function InventoryProducts() {
     setCogsAccount(product.cogsAccountCode || defaultAccounts.cogs); setRevenueAccount(product.revenueAccountCode);
     setPurchaseAccount(product.purchaseAccountCode);
     // السعر يُعرض كما أُدخل: شاملًا إن كان الصنف بأسعار شاملة الضريبة
-    setPricesIncludeVat(product.pricesIncludeVat); setVatRate(product.vatRate);
+    setPricesIncludeVat(product.pricesIncludeVat); setVatRate(product.vatRate); setVatCategory(product.vatRate === 0 ? product.vatCategory : "");
     const shown = (net: number) => (product.pricesIncludeVat ? grossOf(net, product.vatRate) : net);
     setSalePriceText(numberText(shown(product.salePrice))); setSaleBaseNet(product.salePrice);
     setPurchasePriceText(numberText(shown(product.purchasePrice))); setPurchaseBaseNet(product.purchasePrice);
@@ -252,6 +262,8 @@ export default function InventoryProducts() {
   const changeVatRate = (rate: number) => {
     if (pricesIncludeVat) { setSaleBaseNet(null); setPurchaseBaseNet(null); }
     setVatRate(rate);
+    // الفئة للنسبة صفر فقط
+    if (rate !== 0) setVatCategory("");
   };
 
   const editingProduct = editingId ? products.find((product) => product.id === editingId) : undefined;
@@ -293,6 +305,7 @@ export default function InventoryProducts() {
         cogsAccountCode: itemType === "product" ? cogsAccount : null,
         revenueAccountCode: revenueAccount, active,
         salePrice: saleNet, purchasePrice: purchaseNet, pricesIncludeVat, vatRate,
+        ...(vatCategorySupported ? { vatCategory: vatRate === 0 ? vatCategory || null : null } : {}),
         reorderLevel: itemType === "product" ? prices[2] : 0,
         barcode: barcode.trim(), description: description.trim(),
         purchaseAccountCode: itemType === "service" ? purchaseAccount || null : null,
@@ -437,6 +450,12 @@ export default function InventoryProducts() {
               {rateOptions.map((rate) => <option key={rate} value={String(rate)}>{rate}%</option>)}
             </select>
           </label>
+          {vatRate === 0 && vatCategorySupported && <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+            {t("فئة الضريبة")}
+            <select value={vatCategory} onChange={(event) => setVatCategory(event.target.value)} className="h-9 rounded border px-2 text-sm">
+              {VAT_CATEGORY_OPTIONS.map(([value, label]) => <option key={value || "none"} value={value}>{t(label)}</option>)}
+            </select>
+          </label>}
         </div>
       </div>
       <div className="grid gap-3 md:grid-cols-3">
@@ -445,6 +464,7 @@ export default function InventoryProducts() {
         {itemType === "product" && numberInput("حد إعادة الطلب", reorderLevel, setReorderLevel, t("تنبيه عندما تنزل الكمية المتوفرة إليه"))}
       </div>
       <p className="mt-2 text-[11px] text-slate-400">{t("يُحفظ السعر قبل الضريبة، وتُحسب الضريبة في البنود. فاتورة المبيعات بنسبة 15% وسعر الوحدة فيها بخانتين، فقد تختلف الكميات الكبيرة بهللات عن السعر الشامل.")}</p>
+      {vatRate === 0 && vatCategorySupported && <p className="mt-1 text-[11px] text-slate-400">{t("فئة الضريبة تصنّف بند المشتريات بهذا الصنف تلقائيًا في تقارير الضريبة (نسبة صفر أو معفى أو خارج النطاق). دونها يبقى البند للتصنيف اليدوي إن كان المورد مسجلًا ضريبيًا.")}</p>}
 
       {itemType === "product" && <>
         <h3 className="mb-2 mt-5 text-sm font-semibold text-slate-700">{t("المخزون")}</h3>

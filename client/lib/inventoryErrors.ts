@@ -57,6 +57,8 @@ export function inventoryErrorText(message: string, t: Translate = keepSource): 
   if (has("INVENTORY_PRODUCT_PRICE_INVALID")) return t("الأسعار وحد إعادة الطلب أرقام موجبة أو صفر.");
   // S18: نسبة الضريبة، والرصيد الافتتاحي من بطاقة الصنف
   if (has("INVENTORY_PRODUCT_VAT_RATE_INVALID")) return t("نسبة الضريبة رقم من 0 إلى 100.");
+  // S23: فئة الضريبة للصنف بنسبة صفر
+  if (has("INVENTORY_PRODUCT_VAT_CATEGORY_INVALID") || has("inventory_products_vat_category_check")) return t("فئة الضريبة للصنف بنسبة صفر فقط: نسبة صفر أو معفى أو خارج النطاق.");
   if (has("INVENTORY_OPENING_OFFSET_ACCOUNT_CLASS_INVALID")) return t("الحساب المقابل للرصيد الافتتاحي يجب أن يكون من حقوق الملكية (يبدأ بالرقم 3).");
   if (has("INVENTORY_OPENING_LINE_VALUES_INVALID") || has("INVENTORY_OPENING_LINE_AMOUNT_INVALID")) return t("الرصيد الافتتاحي يحتاج كمية وتكلفة وحدة أكبر من صفر ومستودعًا.");
   if (has("INVENTORY_PRODUCT_BARCODE_EXISTS")) return t("الباركود مستخدم لصنف آخر في المنشأة.");

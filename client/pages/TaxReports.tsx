@@ -1,5 +1,5 @@
-import { AlertTriangle, Download, Printer, RefreshCw, ShieldCheck, Tags, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CheckCheck, Download, Printer, RefreshCw, ShieldCheck, Tags, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "@/components/Layout";
 import { useI18n } from "@/i18n";
 import { supabase } from "@/lib/supabaseClient";
@@ -8,10 +8,15 @@ import { COMPANY_REPORT_BRAND, exportReportExcel, printReport, type ReportColumn
 import { containsUuid, selectAllRows } from "@/lib/ledgerData";
 import { accountingErrorText } from "@/lib/accountingErrors";
 
-type Item = { description: string; quantity: number; unitPrice: number; discount: number; taxPercent: number; accountCode: string };
+// rateMissing: البند بلا نسبة؛ النسبة المعروضة هي ما تحسبه الفاتورة، والحفظ اليدوي يعدّه صفرًا (عدا إشعار عليه ضريبة)
+type Item = { description: string; quantity: number; unitPrice: number; discount: number; taxPercent: number; accountCode: string; rateMissing?: boolean };
 // outOfScopeOnly: إشعار على فاتورة مورد غير مقيم — بنوده خارج نطاق الإقرار (القاعدة تفرض ذلك)
-type SourceDocument = { table: string; id: string; number: string; date: string; counterparty: string; side: "sales" | "purchases"; items: Item[]; eligible: boolean; outOfScopeOnly?: boolean };
-type Classification = { document_table: string; document_id: string; line_index: number };
+// automatic: فاتورة مورد غير مقيم — تُصنَّف في ترحيلها ولا تُعدَّل يدويًا
+// tax: ضريبة المستند كما تقارنها دالة الحفظ اليدوي
+type SourceDocument = { table: string; id: string; number: string; date: string; counterparty: string; side: "sales" | "purchases"; items: Item[]; eligible: boolean; tax: number; outOfScopeOnly?: boolean; automatic?: boolean };
+// confirmed_by فارغ: صنّفه النظام تلقائيًا عند الترحيل (S23)
+type Classification = { id?: string; document_table: string; document_id: string; line_index: number; tax_category: string; supply_type: string; confirmed_by: string | null };
+type ClassificationState = "none" | "partial" | "auto" | "manual" | "locked";
 type SummaryGroup = { document_side: string; tax_category: string; supply_type: string; document_count: number; taxable_amount: number; tax_amount: number };
 type DetailLine = { id: string; document_table: string; document_id: string; document_date: string; document_side: string; line_description: string; tax_category: string; supply_type: string; tax_rate: number; taxable_amount: number; tax_amount: number };
 type DraftClass = { lineIndex: number; taxCategory: string; supplyType: string };
@@ -19,7 +24,21 @@ type ReconciliationRow = { document_table: string; document_id: string; document
 type ReportRow = Record<string, string | number>;
 
 const number = (value: unknown) => Number(value ?? 0) || 0;
-const mapItems = (items: unknown): Item[] => Array.isArray(items) ? items.map((item) => { const row = item as Record<string, unknown>; return { description: String(row.description ?? ""), quantity: number(row.quantity), unitPrice: number(row.unitPrice), discount: number(row.discount), taxPercent: number(row.taxPercent), accountCode: String(row.accountCode ?? row.account ?? "") }; }) : [];
+const mapItems = (items: unknown): Item[] => Array.isArray(items) ? items.map((item) => { const row = item as Record<string, unknown>; return { description: String(row.description ?? ""), quantity: number(row.quantity), unitPrice: number(row.unitPrice), discount: number(row.discount), taxPercent: number(row.taxPercent), accountCode: String(row.accountCode ?? row.account ?? ""), rateMissing: row.taxPercent === undefined || row.taxPercent === null || String(row.taxPercent).trim() === "" }; }) : [];
+// البند بلا نسبة: فاتورة المبيعات تحسبه 15%، والإشعار 15% إن كانت عليه ضريبة (كما يصنّفه الخادم)
+const withDefaultRate = (items: Item[], rate: number): Item[] => items.map((item) => (item.rateMissing ? { ...item, taxPercent: rate } : item));
+// تقريب لهللتين كتقريب القاعدة (النصف بعيدًا عن الصفر، مع هامش لأخطاء الفاصلة العائمة)
+const toCents = (value: number) => Math.sign(value) * Math.round(Math.abs(value) * 100 + 1e-7) / 100;
+const lineBase = (item: Item) => toCents(Math.max(item.quantity * item.unitPrice - item.discount, 0));
+// مجموع الضريبة كما تحسبه دالة الحفظ اليدوي؛ إن خالف ضريبة المستند بأكثر من هللتين يُرفض الحفظ
+const manualTaxMismatch = (document: SourceDocument) => {
+  const saveRate = (item: Item) => (item.rateMissing ? (document.table === "invoice_adjustment_notes" && Math.abs(document.tax) > 0 ? 15 : 0) : item.taxPercent);
+  const total = document.items.reduce((sum, item) => sum + toCents((lineBase(item) * saveRate(item)) / 100), 0);
+  return Math.abs(toCents(total) - Math.abs(document.tax)) > 0.02 + 1e-7;
+};
+// سبب رفض الحفظ اليدوي مسبقًا: بند مبيعات بلا نسبة (الحفظ يعدّه صفرًا)، أو فرق أكبر من هللتين
+const manualSaveBlock = (document: SourceDocument): "rate" | "mismatch" | null =>
+  document.table === "sales_invoices" && document.items.some((item) => item.rateMissing) ? "rate" : manualTaxMismatch(document) ? "mismatch" : null;
 // الحساب الوسيط للجمارك المدفوعة نيابة عنا: سطره خارج نطاق الإقرار (ضريبته في البيان الجمركي)
 const CUSTOMS_CLEARING_ACCOUNT = "2115";
 const categoryNames: Record<string, string> = { standard: "النسبة الأساسية 15%", zero_rated: "نسبة صفر", exempt: "معفى", out_of_scope: "خارج النطاق" };
@@ -45,6 +64,16 @@ const returnBoxOf = (side: string, category: string, supply: string) =>
 const cents = (value: number) => Math.round(value * 100) / 100;
 // عكس البيان الجمركي يُحفظ بمعرّف "<معرّف البيان>:reversal" وبمبالغ سالبة
 const isCustomsReversal = (table: string, id: string) => table === "customs_declarations" && id.endsWith(":reversal");
+// الفئات المتاحة للبند في نافذة التصنيف (الخادم يفرض القواعد نفسها)
+const allowedCategories = (document: SourceDocument, item: Item): string[] => {
+  if (document.side === "purchases" && (document.outOfScopeOnly || item.accountCode === CUSTOMS_CLEARING_ACCOUNT)) return ["out_of_scope"];
+  if (item.taxPercent === 15) return ["standard"];
+  if (item.taxPercent === 0) return ["zero_rated", "exempt", "out_of_scope"];
+  return [];
+};
+const allowedSupplies = (document: SourceDocument) => (document.side === "sales" ? ["domestic", "export"] : ["domestic"]);
+const classificationStateNames: Record<ClassificationState, string> = { none: "غير مصنف", partial: "مصنف جزئيًا", auto: "تلقائي عند الترحيل", manual: "يدوي", locked: "تلقائي (مقفل)" };
+const classificationStateStyles: Record<ClassificationState, string> = { none: "bg-red-50 text-red-700", partial: "bg-amber-50 text-amber-700", auto: "bg-sky-50 text-sky-700", manual: "bg-emerald-50 text-emerald-700", locked: "bg-slate-100 text-slate-600" };
 const reasonNames: Record<string, string> = { missing_journal: "لا يوجد قيد محاسبي مرحّل لهذا المستند", missing_classification: "لم يتم تصنيف أي بند ضريبي", partial_classification: "تم تصنيف جزء من بنود المستند فقط", document_tax_mismatch: "إجمالي الضريبة المصنفة لا يساوي ضريبة المستند", journal_tax_mismatch: "ضريبة القيد المحاسبي لا تساوي ضريبة المستند", matched: "المستند متطابق" };
 
 export default function TaxReports() {
@@ -63,6 +92,12 @@ export default function TaxReports() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // S23: التصنيف التلقائي للفترة، وعرض المستندات المصنفة لمراجعتها
+  const [notice, setNotice] = useState("");
+  const [classView, setClassView] = useState<"pending" | "all">("pending");
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [suggested, setSuggested] = useState(false);
+  const openToken = useRef(0);
   const invalidRange = dateFrom > dateTo;
   // Math.abs(...) < 0.005 يمنع ظهور "-0.00"
   const money = (value: number) => formatNumber(Math.abs(value) < 0.005 ? 0 : value, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -75,10 +110,11 @@ export default function TaxReports() {
       // نفس مصدر الملخص (get_vat_report_summary) ونفس الشروط، كاملًا بترقيم الصفحات حتى تطابق إجماليات التفاصيل خانات الملخص؛
       // ويشمل أسطر عكس البيان الجمركي (معرّف المستند "<id>:reversal" بمبالغ سالبة).
       selectAllRows<DetailLine>((from, to) => supabase.from("accounting_vat_line_classifications").select("id, document_table, document_id, document_date, document_side, line_description, tax_category, supply_type, tax_rate, taxable_amount, tax_amount").eq("report_eligible", true).gte("document_date", dateFrom).lte("document_date", dateTo).order("document_date").order("document_table").order("document_id").order("line_index").order("id").range(from, to)),
-      supabase.from("sales_invoices").select("id, date, customer, items, accounting_status").gte("date", dateFrom).lte("date", dateTo),
-      supabase.from("purchase_invoices").select("id, date, vendor, items, accounting_status, accounting_journal_entry_id").eq("accounting_status", "posted").gte("date", dateFrom).lte("date", dateTo),
-      supabase.from("invoice_adjustment_notes").select("id, note_number, note_type, issue_date, counterparty, items, tax, status, accounting_status, original_invoice_id").eq("status", "posted").gte("issue_date", dateFrom).lte("issue_date", dateTo),
-      supabase.from("accounting_vat_line_classifications").select("document_table, document_id, line_index").gte("document_date", dateFrom).lte("document_date", dateTo),
+      // كاملة بترقيم الصفحات (حد الخادم 1000 صف): بعد التصنيف التلقائي لكل بند مرحّل سطر تصنيف
+      selectAllRows<Record<string, unknown>>((from, to) => supabase.from("sales_invoices").select("id, date, customer, items, accounting_status, total_tax").gte("date", dateFrom).lte("date", dateTo).order("id").range(from, to)),
+      selectAllRows<Record<string, unknown>>((from, to) => supabase.from("purchase_invoices").select("id, date, vendor, items, accounting_status, accounting_journal_entry_id, import_treatment, total_tax").eq("accounting_status", "posted").gte("date", dateFrom).lte("date", dateTo).order("id").range(from, to)),
+      selectAllRows<Record<string, unknown>>((from, to) => supabase.from("invoice_adjustment_notes").select("id, note_number, note_type, issue_date, counterparty, items, tax, status, accounting_status, original_invoice_id").eq("status", "posted").gte("issue_date", dateFrom).lte("issue_date", dateTo).order("id").range(from, to)),
+      selectAllRows<Classification>((from, to) => supabase.from("accounting_vat_line_classifications").select("id, document_table, document_id, line_index, tax_category, supply_type, confirmed_by").gte("document_date", dateFrom).lte("document_date", dateTo).order("document_table").order("document_id").order("line_index").order("id").range(from, to)),
       supabase.rpc("get_vat_accounting_reconciliation", { p_date_from: dateFrom, p_date_to: dateTo }),
     ]);
     // إشعارات المشتريات على فواتير مورد غير مقيم: بنودها خارج نطاق الإقرار
@@ -92,9 +128,9 @@ export default function TaxReports() {
     const firstError = summaryResult.error ?? detailResult.error ?? salesResult.error ?? purchaseResult.error ?? notesResult.error ?? classResult.error ?? reconciliationResult.error;
     if (firstError) { setError(accountingErrorText(firstError.message, t)); setLoading(false); return; }
     const sourceDocuments: SourceDocument[] = [
-      ...(salesResult.data ?? []).map((row) => ({ table: "sales_invoices", id: String(row.id), number: String(row.id), date: String(row.date), counterparty: String(row.customer ?? ""), side: "sales" as const, items: mapItems(row.items), eligible: row.accounting_status === "posted" })),
-      ...(purchaseResult.data ?? []).map((row) => ({ table: "purchase_invoices", id: String(row.id), number: String(row.id), date: String(row.date), counterparty: String(row.vendor ?? ""), side: "purchases" as const, items: mapItems(row.items), eligible: row.accounting_status === "posted" && Boolean(row.accounting_journal_entry_id) })),
-      ...(notesResult.data ?? []).map((row) => ({ table: "invoice_adjustment_notes", id: String(row.id), number: String(row.note_number), date: String(row.issue_date), counterparty: String(row.counterparty ?? ""), side: (["purchase_debit", "purchase_credit"].includes(String(row.note_type)) ? "purchases" : "sales") as "sales" | "purchases", items: mapItems(row.items).map((item) => ({ ...item, taxPercent: item.taxPercent || (number(row.tax) > 0 ? 15 : 0) })), eligible: row.accounting_status === "posted", outOfScopeOnly: ["purchase_debit", "purchase_credit"].includes(String(row.note_type)) && importInvoiceIds.has(String(row.original_invoice_id ?? "")) })),
+      ...(salesResult.data ?? []).map((row) => ({ table: "sales_invoices", id: String(row.id), number: String(row.id), date: String(row.date), counterparty: String(row.customer ?? ""), side: "sales" as const, items: withDefaultRate(mapItems(row.items), 15), eligible: row.accounting_status === "posted", tax: number(row.total_tax) })),
+      ...(purchaseResult.data ?? []).map((row) => ({ table: "purchase_invoices", id: String(row.id), number: String(row.id), date: String(row.date), counterparty: String(row.vendor ?? ""), side: "purchases" as const, items: mapItems(row.items), eligible: row.accounting_status === "posted" && Boolean(row.accounting_journal_entry_id), tax: number(row.total_tax), automatic: Boolean(row.import_treatment) })),
+      ...(notesResult.data ?? []).map((row) => ({ table: "invoice_adjustment_notes", id: String(row.id), number: String(row.note_number), date: String(row.issue_date), counterparty: String(row.counterparty ?? ""), side: (["purchase_debit", "purchase_credit"].includes(String(row.note_type)) ? "purchases" : "sales") as "sales" | "purchases", items: withDefaultRate(mapItems(row.items), Math.abs(number(row.tax)) > 0 ? 15 : 0), eligible: row.accounting_status === "posted", tax: number(row.tax), outOfScopeOnly: ["purchase_debit", "purchase_credit"].includes(String(row.note_type)) && importInvoiceIds.has(String(row.original_invoice_id ?? "")) })),
     ];
     setGroups((summaryResult.data ?? []) as SummaryGroup[]);
     setDetails((detailResult.data ?? []) as DetailLine[]);
@@ -112,6 +148,20 @@ export default function TaxReports() {
     return result;
   }, [classifications]);
   const unclassified = documents.filter((document) => (classifiedCount.get(`${document.table}:${document.id}`) ?? 0) !== document.items.length);
+  const classificationsByDocument = useMemo(() => {
+    const result = new Map<string, Classification[]>();
+    classifications.forEach((item) => { const key = `${item.document_table}:${item.document_id}`; result.set(key, [...(result.get(key) ?? []), item]); });
+    return result;
+  }, [classifications]);
+  const classificationState = (document: SourceDocument): ClassificationState => {
+    const lines = classificationsByDocument.get(`${document.table}:${document.id}`) ?? [];
+    if (document.automatic && lines.length) return "locked";
+    if (!lines.length) return "none";
+    if (lines.length !== document.items.length) return "partial";
+    return lines.every((line) => !line.confirmed_by) ? "auto" : "manual";
+  };
+  const classificationList = classView === "pending" ? unclassified : documents;
+  const selectedBlock = selectedDocument ? manualSaveBlock(selectedDocument) : null;
   // المستندات المرحّلة غير المصنفة تسقط من الإقرار بصمت، لذلك يُحجب صافي الضريبة حتى تُصنَّف.
   const unclassifiedPosted = unclassified.filter((document) => document.eligible);
   const returnBoxes = useMemo<ReturnBox[]>(() => {
@@ -237,35 +287,75 @@ export default function TaxReports() {
   const exportSummary = mode === "details" ? detailTotalRows.flatMap((row) => [{ label: `${row.label} — ${t("المبلغ الخاضع")}`, value: row.base }, { label: `${row.label} — ${t("الضريبة")}`, value: row.tax }]) : [];
   const exportOptions = { title: reportTitle, subtitle: exportDisclaimer, columns, rows: exportRows, summary: exportSummary, fileName: reportTitle, landscape: true, brand: COMPANY_REPORT_BRAND };
 
-  const openClassification = (document: SourceDocument) => {
+  // رسائل التصنيف (النافذة والتصنيف التلقائي)
+  const vatErrorText = (raw: string) => {
+    const message = String(raw ?? "");
+    if (message.includes("VAT_LINE_OUT_OF_SCOPE_ONLY")) return t("هذا البند خارج نطاق الإقرار: إشعار على فاتورة مورد غير مقيم أو جمارك مدفوعة نيابة عنا؛ اختر «خارج النطاق»");
+    if (message.includes("VAT_IMPORT_CLASSIFICATION_AUTOMATIC_ONLY")) return t("الاستيراد والاحتساب العكسي يُصنَّفان تلقائيًا من البيان الجمركي وفاتورة المورد غير المقيم");
+    if (message.includes("VAT_AUTOMATIC_CLASSIFICATION_LOCKED")) return t("تصنيف هذا المستند تلقائي ولا يُعدَّل يدويًا");
+    if (message.includes("VAT_DOCUMENT_TAX_MISMATCH")) return t("مجموع ضريبة البنود لا يساوي ضريبة المستند (فرق أكبر من هللتين)؛ راجع المحاسب");
+    if (message.includes("VAT_DATE_RANGE_INVALID")) return t("تاريخ البداية يجب أن يسبق تاريخ النهاية");
+    if (message.includes("PGRST202") || message.includes("Could not find the function")) return t("التصنيف التلقائي يحتاج تحديث قاعدة البيانات (S23)");
+    return accountingErrorText(message, t);
+  };
+  const openClassification = async (document: SourceDocument) => {
+    const token = ++openToken.current;
+    const existing = classificationsByDocument.get(`${document.table}:${document.id}`) ?? [];
     setSelectedDocument(document);
-    setDraft(document.items.map((_, lineIndex) => ({ lineIndex, taxCategory: "", supplyType: "" })));
-    setError("");
+    setSuggested(false);
+    // المستند المصنف يُفتح بتصنيفه الحالي (التلقائي يُعدَّل هنا)، وغير المصنف بما يقترحه النظام إن أمكن
+    setDraft(document.items.map((_, lineIndex) => {
+      const line = existing.find((row) => row.line_index === lineIndex);
+      return { lineIndex, taxCategory: line?.tax_category ?? "", supplyType: line?.supply_type ?? "" };
+    }));
+    setError(""); setNotice("");
+    if (existing.length === document.items.length || !document.eligible) return;
+    const { data, error: suggestError } = await supabase.rpc("vat_suggest_document_classification", { p_document_table: document.table, p_document_id: document.id });
+    // قبل S23 أو بلا صلاحية: النافذة فارغة كما كانت
+    if (suggestError || !Array.isArray(data) || token !== openToken.current) return;
+    // يُطبَّق المقترح المتاح في النافذة فقط، وعلى البند الذي لم يُحدَّد بعد
+    const applicable = new Map<number, DraftClass>();
+    (data as Array<{ lineIndex?: number; taxCategory?: string | null; supplyType?: string | null }>).forEach((value) => {
+      const lineIndex = Number(value.lineIndex);
+      const item = document.items[lineIndex];
+      const category = String(value.taxCategory ?? "");
+      const supply = String(value.supplyType ?? "domestic");
+      if (item && category && allowedCategories(document, item).includes(category) && allowedSupplies(document).includes(supply)) {
+        applicable.set(lineIndex, { lineIndex, taxCategory: category, supplyType: supply });
+      }
+    });
+    if (!applicable.size) return;
+    setDraft((current) => current.map((row) => (!row.taxCategory && applicable.has(row.lineIndex) ? applicable.get(row.lineIndex) as DraftClass : row)));
+    setSuggested(true);
+  };
+  const closeClassification = () => { openToken.current += 1; setSelectedDocument(null); };
+  // يصنّف ما يمكن تحديده من المستندات المرحّلة في الفترة (بعد تحديد فئة ضريبة الصنف مثلًا)
+  const runAutoClassification = async () => {
+    if (invalidRange) { setError(t("تاريخ البداية يجب أن يسبق تاريخ النهاية")); return; }
+    setAutoBusy(true); setError(""); setNotice("");
+    const { data, error: autoError } = await supabase.rpc("auto_classify_vat_documents", { p_date_from: dateFrom, p_date_to: dateTo });
+    setAutoBusy(false);
+    if (autoError) { setError(vatErrorText(autoError.message)); return; }
+    const result = (data ?? {}) as { classified?: number; remaining?: number };
+    await load();
+    setNotice(`${t("صُنّف تلقائيًا")}: ${number(result.classified)} — ${t("بقي للتصنيف اليدوي")}: ${number(result.remaining)}`);
   };
   const saveClassification = async () => {
     if (!selectedDocument || draft.some((item) => !item.taxCategory || !item.supplyType)) { setError(t("يجب اختيار الفئة الضريبية ونوع التوريد لكل بند")); return; }
     setSaving(true); setError("");
     const { error: saveError } = await supabase.rpc("save_vat_document_classification", { p_document_table: selectedDocument.table, p_document_id: selectedDocument.id, p_lines: draft });
     setSaving(false);
-    if (saveError) {
-      const message = String(saveError.message ?? "");
-      setError(
-        message.includes("VAT_LINE_OUT_OF_SCOPE_ONLY") ? t("هذا البند خارج نطاق الإقرار: إشعار على فاتورة مورد غير مقيم أو جمارك مدفوعة نيابة عنا؛ اختر «خارج النطاق»")
-        : message.includes("VAT_IMPORT_CLASSIFICATION_AUTOMATIC_ONLY") ? t("الاستيراد والاحتساب العكسي يُصنَّفان تلقائيًا من البيان الجمركي وفاتورة المورد غير المقيم")
-        : message.includes("VAT_AUTOMATIC_CLASSIFICATION_LOCKED") ? t("تصنيف هذا المستند تلقائي ولا يُعدَّل يدويًا")
-        : accountingErrorText(message, t),
-      );
-      return;
-    }
-    setSelectedDocument(null); await load();
+    if (saveError) { setError(vatErrorText(saveError.message)); return; }
+    closeClassification(); await load();
   };
 
   return <Layout><main dir={direction} className="min-h-full bg-slate-50 p-4"><div className="mx-auto max-w-[1500px] overflow-hidden rounded border border-slate-200 bg-white shadow-sm">
     <header className="flex flex-wrap items-center justify-between gap-3 border-t-2 border-red-700 px-4 py-3"><div><p className="text-[11px] text-slate-400">{t("التقارير")}</p><h1 className="text-base font-bold">{t("تقارير ضريبة القيمة المضافة")}</h1></div><div className="flex gap-1"><button onClick={() => void load()} className="rounded border p-2"><RefreshCw className="h-4 w-4" /></button>{mode !== "classification" && <><button onClick={() => printReport(exportOptions)} className="rounded border p-2"><Printer className="h-4 w-4" /></button><button onClick={() => exportReportExcel(exportOptions)} className="rounded border p-2"><Download className="h-4 w-4" /></button></>}</div></header>
-    <div className="flex flex-wrap items-center justify-between gap-3 border-y bg-slate-50 px-4 py-3"><div className="flex rounded bg-slate-200/60 p-1"><button onClick={() => setMode("summary")} className={`rounded px-3 py-1.5 text-xs ${mode === "summary" ? "bg-white font-bold shadow" : ""}`}>{t("ملخص")}</button><button onClick={() => setMode("details")} className={`rounded px-3 py-1.5 text-xs ${mode === "details" ? "bg-white font-bold shadow" : ""}`}>{t("تفاصيل")}</button><button onClick={() => setMode("reconciliation")} className={`rounded px-3 py-1.5 text-xs ${mode === "reconciliation" ? "bg-white font-bold shadow" : ""}`}><ShieldCheck className="me-1 inline h-3 w-3" />{t("المطابقة")} ({reconciliation.filter((row) => row.reconciliation_status !== "matched").length})</button><button onClick={() => setMode("classification")} className={`rounded px-3 py-1.5 text-xs ${mode === "classification" ? "bg-white font-bold shadow" : ""}`}><Tags className="me-1 inline h-3 w-3" />{t("التصنيف")} ({unclassified.length})</button></div><div className="flex gap-2"><input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="rounded border px-2 py-1.5 text-xs" /><input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="rounded border px-2 py-1.5 text-xs" /></div></div>
+    <div className="flex flex-wrap items-center justify-between gap-3 border-y bg-slate-50 px-4 py-3"><div className="flex rounded bg-slate-200/60 p-1"><button onClick={() => setMode("summary")} className={`rounded px-3 py-1.5 text-xs ${mode === "summary" ? "bg-white font-bold shadow" : ""}`}>{t("ملخص")}</button><button onClick={() => setMode("details")} className={`rounded px-3 py-1.5 text-xs ${mode === "details" ? "bg-white font-bold shadow" : ""}`}>{t("تفاصيل")}</button><button onClick={() => setMode("reconciliation")} className={`rounded px-3 py-1.5 text-xs ${mode === "reconciliation" ? "bg-white font-bold shadow" : ""}`}><ShieldCheck className="me-1 inline h-3 w-3" />{t("المطابقة")} ({reconciliation.filter((row) => row.reconciliation_status !== "matched").length})</button><button onClick={() => setMode("classification")} className={`rounded px-3 py-1.5 text-xs ${mode === "classification" ? "bg-white font-bold shadow" : ""}`}><Tags className="me-1 inline h-3 w-3" />{t("التصنيف الضريبي")} ({unclassified.length})</button></div><div className="flex gap-2"><input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="rounded border px-2 py-1.5 text-xs" /><input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="rounded border px-2 py-1.5 text-xs" /></div></div>
     {error && <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700">{error}</div>}
-    <section className="p-4">{loading ? <p className="py-20 text-center text-sm text-slate-500">{t("جاري التحميل...")}</p> : mode === "classification" ? <div><p className="mb-3 text-xs text-slate-500">{t("لن تُدرج المستندات غير المصنفة في التقرير الرسمي، ولا يتم استنتاج الإعفاء أو التصدير من نسبة الصفر.")}</p><div className="overflow-x-auto"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr><th className="px-3 py-2">{t("التاريخ")}</th><th className="px-3 py-2">{t("المستند")}</th><th className="px-3 py-2">{t("جهة التعامل")}</th><th className="px-3 py-2">{t("عدد البنود")}</th><th className="px-3 py-2">{t("حالة الترحيل")}</th><th /></tr></thead><tbody>{unclassified.length ? unclassified.map((document) => <tr key={`${document.table}:${document.id}`} className="border-b"><td className="px-3 py-2 text-center">{document.date}</td><td className="px-3 py-2 text-center">{document.number}</td><td className="px-3 py-2">{document.counterparty || "—"}</td><td className="px-3 py-2 text-center">{document.items.length}</td><td className="px-3 py-2 text-center"><span className={`rounded px-2 py-1 ${document.eligible ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{t(document.eligible ? "مرحّل وقابل للإدراج" : "غير مرحّل — غير مدرج")}</span></td><td className="px-3 py-2 text-center"><button onClick={() => openClassification(document)} className="rounded bg-blue-700 px-3 py-1.5 text-white">{t("تصنيف البنود")}</button></td></tr>) : <tr><td colSpan={6} className="py-12 text-center text-slate-400">{t("تم تصنيف جميع المستندات في الفترة")}</td></tr>}</tbody></table></div></div> : <><div className="mb-3 flex items-center gap-2 rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-800"><ShieldCheck className="h-4 w-4" />{t("يعرض التقرير المستندات المصنفة والمرحلة فقط")}</div>{unclassifiedPosted.length > 0 && <div className="mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{t("يوجد مستندات مرحّلة لم تُصنَّف ضريبيًا ولن تظهر في الأرقام أدناه؛ صافي الضريبة محجوب حتى يكتمل التصنيف")}: {unclassifiedPosted.length} <button onClick={() => setMode("classification")} className="ms-2 underline">{t("فتح التصنيف")}</button></span></div>}<div className="mb-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">{t("تشمل الأرقام فواتير المبيعات والمشتريات والإشعارات والبيانات الجمركية المرحّلة والمصنفة فقط؛ التوريدات خارج النطاق لا تدخل في الإجماليات. ضريبة المدخلات لا تُخصم إلا بفاتورة ضريبية صحيحة من مورد مسجل، أو ببيان جمركي باسم الشركة، أو بالاحتساب العكسي.")}</div>{mode === "details" && hasCustomsReversalLines && <div className="mb-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{t("البيان الجمركي المعكوس يظهر بسطرين: الأصل بتاريخه، وسطر «عكس بيان جمركي» بمبالغ سالبة بتاريخ العكس؛ وصافيهما صفر كما في الملخص.")}</div>}{mode === "details" && detailMismatch && <div className="mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{t("إجماليات التفاصيل لا تطابق خانات الملخص؛ أعد تحميل التقرير أو راجع التصنيفات")}</span></div>}<div className="overflow-x-auto"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr>{columns.map((column) => <th key={column.key} className="px-3 py-2 text-center">{column.label}</th>)}</tr></thead><tbody>{exportRows.length ? exportRows.map((row, index) => <tr key={index} className={`border-b ${mode === "summary" && ["6", "12", "13"].includes(String(row.box)) ? "bg-slate-50 font-bold" : ""}`}>{columns.map((column) => <td key={column.key} className="px-3 py-2 text-center">{row[column.key] ?? "—"}</td>)}</tr>) : <tr><td colSpan={columns.length} className="py-16 text-center text-slate-400">{t("لا توجد بيانات ضريبية مصنفة ومرحلة للفترة")}</td></tr>}</tbody>{mode === "details" && detailRows.length > 0 && <tfoot>{detailTotalRows.map((row) => <tr key={row.label} className="border-t-2 border-slate-200 bg-slate-50 font-bold"><td colSpan={columns.length - 2} className="px-3 py-2 text-start">{row.label}</td><td className="px-3 py-2 text-center">{row.base}</td><td className="px-3 py-2 text-center">{row.tax}</td></tr>)}</tfoot>}</table></div>{mode === "summary" && <div className="mt-6"><p className="mb-2 text-xs font-semibold text-slate-600">{t("التفصيل حسب الفئة الضريبية ونوع التوريد")}</p><div className="overflow-x-auto"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr>{groupColumns.map((column) => <th key={column.key} className="px-3 py-2 text-center">{column.label}</th>)}</tr></thead><tbody>{groupRows.length ? groupRows.map((row, index) => <tr key={index} className="border-b">{groupColumns.map((column) => <td key={column.key} className="px-3 py-2 text-center">{row[column.key] ?? "—"}</td>)}</tr>) : <tr><td colSpan={groupColumns.length} className="py-8 text-center text-slate-400">{t("لا توجد بيانات ضريبية مصنفة ومرحلة للفترة")}</td></tr>}</tbody></table></div></div>}</>}</section>
+    {notice && <div className="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-800">{notice}</div>}
+    <section className="p-4">{loading ? <p className="py-20 text-center text-sm text-slate-500">{t("جاري التحميل...")}</p> : mode === "classification" ? <div><p className="mb-3 text-xs text-slate-500">{t("تُصنَّف المستندات تلقائيًا عند ترحيلها: بند 15% بالنسبة الأساسية، وبند المشتريات بنسبة صفر بفئة ضريبة الصنف، أو خارج النطاق إن كان المورد غير مسجل ضريبيًا. يبقى هنا ما لا يُحدَّد تلقائيًا (مثل بند بنسبة صفر بلا فئة من مورد مسجل)، ولا يُدرج في التقرير حتى يُصنَّف. التصدير لا يُستنتج من نسبة الصفر.")}</p><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><div className="flex rounded bg-slate-200/60 p-1"><button onClick={() => setClassView("pending")} className={`rounded px-3 py-1.5 text-xs ${classView === "pending" ? "bg-white font-bold shadow" : ""}`}>{t("غير المصنفة")} ({unclassified.length})</button><button onClick={() => setClassView("all")} className={`rounded px-3 py-1.5 text-xs ${classView === "all" ? "bg-white font-bold shadow" : ""}`}>{t("كل المستندات")} ({documents.length})</button></div><button disabled={autoBusy || invalidRange} onClick={() => void runAutoClassification()} className="inline-flex items-center gap-1.5 rounded border border-blue-700 px-3 py-1.5 text-xs font-semibold text-blue-700 disabled:opacity-50"><CheckCheck className="h-3.5 w-3.5" />{autoBusy ? t("جاري التصنيف...") : t("تصنيف تلقائي للفترة")}</button></div><div className="overflow-x-auto"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr><th className="px-3 py-2">{t("التاريخ")}</th><th className="px-3 py-2">{t("المستند")}</th><th className="px-3 py-2">{t("جهة التعامل")}</th><th className="px-3 py-2">{t("عدد البنود")}</th><th className="px-3 py-2">{t("حالة الترحيل")}</th><th className="px-3 py-2">{t("حالة التصنيف")}</th><th /></tr></thead><tbody>{classificationList.length ? classificationList.map((document) => { const state = classificationState(document); return <tr key={`${document.table}:${document.id}`} className="border-b"><td className="px-3 py-2 text-center">{document.date}</td><td className="px-3 py-2 text-center">{document.number}</td><td className="px-3 py-2">{document.counterparty || "—"}</td><td className="px-3 py-2 text-center">{document.items.length}</td><td className="px-3 py-2 text-center"><span className={`rounded px-2 py-1 ${document.eligible ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{t(document.eligible ? "مرحّل وقابل للإدراج" : "غير مرحّل — غير مدرج")}</span></td><td className="px-3 py-2 text-center"><span className={`rounded px-2 py-1 ${classificationStateStyles[state]}`}>{t(classificationStateNames[state])}</span></td><td className="px-3 py-2 text-center">{state === "locked" ? <span className="text-slate-400">{t("من الترحيل")}</span> : <button onClick={() => void openClassification(document)} className={`rounded px-3 py-1.5 ${state === "none" || state === "partial" ? "bg-blue-700 text-white" : "border border-blue-700 text-blue-700"}`}>{t(state === "none" || state === "partial" ? "تصنيف البنود" : "مراجعة التصنيف")}</button>}</td></tr>; }) : <tr><td colSpan={7} className="py-12 text-center text-slate-400">{t(classView === "pending" ? "تم تصنيف جميع المستندات في الفترة" : "لا توجد مستندات في الفترة")}</td></tr>}</tbody></table></div></div> : <><div className="mb-3 flex items-center gap-2 rounded bg-emerald-50 px-3 py-2 text-xs text-emerald-800"><ShieldCheck className="h-4 w-4" />{t("يعرض التقرير المستندات المصنفة والمرحلة فقط")}</div>{unclassifiedPosted.length > 0 && <div className="mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{t("يوجد مستندات مرحّلة لم تُصنَّف ضريبيًا ولن تظهر في الأرقام أدناه؛ صافي الضريبة محجوب حتى يكتمل التصنيف")}: {unclassifiedPosted.length} <button onClick={() => setMode("classification")} className="ms-2 underline">{t("فتح التصنيف")}</button></span></div>}<div className="mb-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">{t("تشمل الأرقام فواتير المبيعات والمشتريات والإشعارات والبيانات الجمركية المرحّلة والمصنفة فقط؛ التوريدات خارج النطاق لا تدخل في الإجماليات. ضريبة المدخلات لا تُخصم إلا بفاتورة ضريبية صحيحة من مورد مسجل، أو ببيان جمركي باسم الشركة، أو بالاحتساب العكسي.")}</div>{mode === "details" && hasCustomsReversalLines && <div className="mb-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">{t("البيان الجمركي المعكوس يظهر بسطرين: الأصل بتاريخه، وسطر «عكس بيان جمركي» بمبالغ سالبة بتاريخ العكس؛ وصافيهما صفر كما في الملخص.")}</div>}{mode === "details" && detailMismatch && <div className="mb-3 flex items-start gap-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>{t("إجماليات التفاصيل لا تطابق خانات الملخص؛ أعد تحميل التقرير أو راجع التصنيفات")}</span></div>}<div className="overflow-x-auto"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr>{columns.map((column) => <th key={column.key} className="px-3 py-2 text-center">{column.label}</th>)}</tr></thead><tbody>{exportRows.length ? exportRows.map((row, index) => <tr key={index} className={`border-b ${mode === "summary" && ["6", "12", "13"].includes(String(row.box)) ? "bg-slate-50 font-bold" : ""}`}>{columns.map((column) => <td key={column.key} className="px-3 py-2 text-center">{row[column.key] ?? "—"}</td>)}</tr>) : <tr><td colSpan={columns.length} className="py-16 text-center text-slate-400">{t("لا توجد بيانات ضريبية مصنفة ومرحلة للفترة")}</td></tr>}</tbody>{mode === "details" && detailRows.length > 0 && <tfoot>{detailTotalRows.map((row) => <tr key={row.label} className="border-t-2 border-slate-200 bg-slate-50 font-bold"><td colSpan={columns.length - 2} className="px-3 py-2 text-start">{row.label}</td><td className="px-3 py-2 text-center">{row.base}</td><td className="px-3 py-2 text-center">{row.tax}</td></tr>)}</tfoot>}</table></div>{mode === "summary" && <div className="mt-6"><p className="mb-2 text-xs font-semibold text-slate-600">{t("التفصيل حسب الفئة الضريبية ونوع التوريد")}</p><div className="overflow-x-auto"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr>{groupColumns.map((column) => <th key={column.key} className="px-3 py-2 text-center">{column.label}</th>)}</tr></thead><tbody>{groupRows.length ? groupRows.map((row, index) => <tr key={index} className="border-b">{groupColumns.map((column) => <td key={column.key} className="px-3 py-2 text-center">{row[column.key] ?? "—"}</td>)}</tr>) : <tr><td colSpan={groupColumns.length} className="py-8 text-center text-slate-400">{t("لا توجد بيانات ضريبية مصنفة ومرحلة للفترة")}</td></tr>}</tbody></table></div></div>}</>}</section>
   </div>
-  {selectedDocument && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={() => setSelectedDocument(null)}><section className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><header className="flex items-center justify-between border-b px-5 py-4"><div><h2 className="font-bold">{t("تصنيف بنود الضريبة")}</h2><p className="text-xs text-slate-500">{selectedDocument.number}</p></div><button onClick={() => setSelectedDocument(null)}><X className="h-5 w-5" /></button></header><div className="overflow-x-auto p-5"><table className="min-w-full text-xs"><thead className="bg-slate-100"><tr><th className="px-3 py-2">{t("البند")}</th><th className="px-3 py-2">{t("نسبة الضريبة")}</th><th className="px-3 py-2">{t("الفئة الضريبية")}</th><th className="px-3 py-2">{t("نوع التوريد")}</th></tr></thead><tbody>{selectedDocument.items.map((item, index) => <tr key={index} className="border-b"><td className="px-3 py-2">{item.description || `#${index + 1}`}</td><td className="px-3 py-2 text-center">{item.taxPercent}%</td><td className="px-3 py-2"><select value={draft[index]?.taxCategory ?? ""} onChange={(event) => setDraft((current) => current.map((value, row) => row === index ? { ...value, taxCategory: event.target.value } : value))} className="w-full rounded border p-2"><option value="">{t("تحديد")}</option>{selectedDocument.side === "purchases" && (selectedDocument.outOfScopeOnly || item.accountCode === CUSTOMS_CLEARING_ACCOUNT) ? <option value="out_of_scope">{t("خارج النطاق")}</option> : <>{item.taxPercent === 15 && <option value="standard">{t("النسبة الأساسية 15%")}</option>}{item.taxPercent === 0 && <><option value="zero_rated">{t("نسبة صفر")}</option><option value="exempt">{t("معفى")}</option><option value="out_of_scope">{t("خارج النطاق")}</option></>}</>}</select></td><td className="px-3 py-2"><select value={draft[index]?.supplyType ?? ""} onChange={(event) => setDraft((current) => current.map((value, row) => row === index ? { ...value, supplyType: event.target.value } : value))} className="w-full rounded border p-2"><option value="">{t("تحديد")}</option><option value="domestic">{t("محلي")}</option>{selectedDocument.side === "sales" && <option value="export">{t("تصدير")}</option>}{/* الاستيراد والاحتساب العكسي (الخانتان 8 و9) يُصنَّفان تلقائيًا فقط من البيان الجمركي وفاتورة المورد غير المقيم */}</select></td></tr>)}</tbody></table></div><footer className="flex justify-end gap-2 border-t px-5 py-4"><button onClick={() => setSelectedDocument(null)} className="rounded border px-4 py-2 text-sm">{t("إلغاء")}</button><button disabled={saving} onClick={() => void saveClassification()} className="rounded bg-blue-700 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? t("جاري الحفظ...") : t("حفظ التصنيف")}</button></footer></section></div>}
+  {selectedDocument && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={closeClassification}><section className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-xl bg-white shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><header className="flex items-center justify-between border-b px-5 py-4"><div><h2 className="font-bold">{t("تصنيف بنود الضريبة")}</h2><p className="text-xs text-slate-500">{selectedDocument.number}</p></div><button onClick={closeClassification}><X className="h-5 w-5" /></button></header><div className="overflow-x-auto p-5">{selectedBlock ? <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">{t(selectedBlock === "rate" ? "في الفاتورة بند بلا نسبة ضريبة؛ يُصنَّف تلقائيًا بنسبة 15% كما حُسبت الفاتورة، ولا يُحفظ تصنيفه يدويًا." : classificationState(selectedDocument) === "auto" ? "صُنّف هذا المستند تلقائيًا بتوزيع فرق التقريب (هللات) على بنوده، والحفظ اليدوي لا يقبل فرقًا أكبر من هللتين؛ يبقى كما صُنّف." : "ضريبة المستند تخالف مجموع ضريبة بنوده بأكثر من هللتين، فلا يُحفظ تصنيفه يدويًا. جرّب «تصنيف تلقائي للفترة» أو راجع المحاسب.")}</p> : classificationState(selectedDocument) === "auto" && <p className="mb-3 rounded bg-sky-50 px-3 py-2 text-xs text-sky-800">{t("صُنّف هذا المستند تلقائيًا عند ترحيله؛ عدّل الفئة عند الحاجة ثم احفظ.")}</p>}{suggested && <p className="mb-3 rounded bg-sky-50 px-3 py-2 text-xs text-sky-800">{t("عُبّئت الفئات التي حددها النظام؛ راجعها وأكمل الباقي ثم احفظ.")}</p>}<table className="min-w-full text-xs"><thead className="bg-slate-100"><tr><th className="px-3 py-2">{t("البند")}</th><th className="px-3 py-2">{t("نسبة الضريبة")}</th><th className="px-3 py-2">{t("الفئة الضريبية")}</th><th className="px-3 py-2">{t("نوع التوريد")}</th></tr></thead><tbody>{selectedDocument.items.map((item, index) => <tr key={index} className="border-b"><td className="px-3 py-2">{item.description || `#${index + 1}`}</td><td className="px-3 py-2 text-center">{item.taxPercent}%</td><td className="px-3 py-2"><select value={draft[index]?.taxCategory ?? ""} onChange={(event) => setDraft((current) => current.map((value, row) => row === index ? { ...value, taxCategory: event.target.value } : value))} className="w-full rounded border p-2"><option value="">{t("تحديد")}</option>{allowedCategories(selectedDocument, item).map((category) => <option key={category} value={category}>{t(categoryNames[category])}</option>)}</select></td><td className="px-3 py-2"><select value={draft[index]?.supplyType ?? ""} onChange={(event) => setDraft((current) => current.map((value, row) => row === index ? { ...value, supplyType: event.target.value } : value))} className="w-full rounded border p-2"><option value="">{t("تحديد")}</option>{allowedSupplies(selectedDocument).map((supply) => <option key={supply} value={supply}>{t(supplyNames[supply])}</option>)}{/* الاستيراد والاحتساب العكسي (الخانتان 8 و9) يُصنَّفان تلقائيًا فقط من البيان الجمركي وفاتورة المورد غير المقيم */}</select></td></tr>)}</tbody></table></div><footer className="flex justify-end gap-2 border-t px-5 py-4"><button onClick={closeClassification} className="rounded border px-4 py-2 text-sm">{t("إلغاء")}</button><button disabled={saving || Boolean(selectedBlock)} onClick={() => void saveClassification()} className="rounded bg-blue-700 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? t("جاري الحفظ...") : t("حفظ التصنيف")}</button></footer></section></div>}
   </main></Layout>;
 }
